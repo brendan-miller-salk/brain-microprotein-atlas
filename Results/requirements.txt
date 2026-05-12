@@ -1,0 +1,7 @@
+streamlit>=1.37.0
+pandas>=1.5.0
+plotly>=5.17.0
+pathlib2>=2.3.7
+huggingface_hub>=0.24.0
+pyarrow>=14.0
+

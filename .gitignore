@@ -1,0 +1,150 @@
+# === Brain Mi# === Exclude everything except Code, Results, and GTF_and_BED_files ===
+/*
+!/Code/
+!/Results/
+!/GTF_and_BED_files/
+!.gitignore
+!README.md
+!requirements.txt
+!environment.yml
+!setup_environment.sh
+!run_all_analyses.sh
+!DATA_AVAILABILITY.md
+!DATA_REQUIREMENTS.md
+
+# === Development environment ===
+.devcontainer/
+
+# === Large processed data files (will be provided via download links) ===
+Code/data/microprotein_master.csv
+Code/data/microprotein_master_OLD.csv
+Code/data/combined_gpath_results.csv
+Code/data/counts.csv
+
+# === Large RP3 analysis results (>50MB each) ===
+Results/RP3/ribocode_results.gtf
+Results/RP3/ribocode_results_collapsed.gtf
+Results/RP3/ribocode_results.bed
+Results/RP3/ribocode_results_collapsed.bed
+Results/RP3/ribocode_results.txt
+Results/RP3/ribocode_results_collapsed.txt
+
+# === Large scRNA dataset ===
+Results/scRNA_Enrichment/Brain_Microproteins_Discovery_MASTER_dataset_scRNA.csv
+
+# === Raw sequencing data (too large for GitHub) ===
+*.fastq
+*.fastq.gz
+*.fq
+*.fq.gz
+*.bam
+*.sam
+
+# === Raw microscopy images ===
+*.nd2
+*.ND2
+*.tif
+*.tiff
+*.TIF
+*.TIFF
+*.lif
+*.czi
+*.oif
+*.oib
+
+# === Raw proteomics data ===
+*.raw
+*.mzML
+*.mzXML
+
+!Code/data/.gitkeep
+
+# Temporary analysis files
+Results/*/temp/
+Results/*/*.tmp
+
+# === Python build artifacts ===
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+.pytest_cache/
+
+# === R artifacts ===
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+
+# === macOS + OS files ===
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# === Virtual environments ===
+.venv/
+venv/
+.conda/
+env/
+
+# === IDEs and editors ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# === Logs and temporary files ===
+*.log
+.env
+.envrc
+*.tmp
+*.temp
+
+# === Jupyter Notebooks checkpoints ===
+.ipynb_checkpoints/
+
+# === System-specific files ===
+*.out
+*.pid
+nohup.out
+
+# === Large figure files (keep PDFs for documentation) ===
+figures/*.png
+figures/*.jpg
+figures/*.tiff
+figures/*.svg
+!figures/*.pdf
+
+# === Sensitive or personal paths ===
+**/brendan_alan_shared_folder/
+**/Library/CloudStorage/
+
+# === Streamlit secrets (keep .example, ignore real) ===
+Results/.streamlit/secrets.toml
+
+# === HF upload staging dir ===
+Results/_hf_stage/
+
+# === Large figure libraries (mirrored to Hugging Face dataset; see Results/README.md) ===
+Results/mirror_plots/
+Results/expression_profiles/
+Results/smorf_cartoon_figures/
+
+# === Files >50MB excluded from GitHub (mirror via Zenodo / HF) ===
+Code/data/microprotein_master_first_submission.csv
+Code/data/tss_motif_prevalence.csv
+GTF_and_BED_files/Ensembl_and_Unreviewed_Brain_Microproteins.gtf
+
+# === Local-only files (never upload) ===
+*.code-workspace
+**/gold_standard_filtering_criteria.py
+Code/data/micrprotein_master_first_submission.zip
+Code/data/microprotein_master_first_submission.zip
+Results/_cache/

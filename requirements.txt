@@ -1,0 +1,41 @@
+# Brain Microprotein Discovery Project - Python Dependencies
+# Install with: pip install -r requirements.txt
+#
+# This file covers the analysis pipeline (`run_all_analyses.sh`) and the
+# Streamlit dashboard (`Results/microproteins_dashboard.py`). The PROSIT
+# spectral-validation pipeline has its own optional deps listed at the
+# bottom and is only required to re-run
+# `Code/Peptide_TMT_analysis/prosit/prosit_pipeline.py`.
+
+# Core data analysis
+pandas>=1.5.0
+numpy>=1.21.0
+scipy>=1.9.0
+
+# Bioinformatics tools
+pybedtools>=0.9.0
+
+# Plotting / figures
+matplotlib>=3.5.0
+seaborn>=0.11.0
+plotly>=5.17.0
+
+# Excel I/O for supplemental tables
+openpyxl>=3.0.0
+xlrd>=2.0.0
+
+# Streamlit dashboard (Results/microproteins_dashboard.py)
+streamlit>=1.28.0
+pathlib2>=2.3.7
+
+# Microscopy quantitation (Code/Miscellanous/actin_quant_pipeline.py)
+scikit-image>=0.20.0
+tifffile>=2023.0.0
+nd2reader>=3.3.0
+
+# Optional - PROSIT spectral validation
+# (Code/Peptide_TMT_analysis/prosit/prosit_pipeline.py)
+# Requires network access to koina.wilhelmlab.org:443
+tqdm>=4.65.0
+pyteomics>=4.6
+# koinapy>=0.0.6

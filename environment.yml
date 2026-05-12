@@ -1,0 +1,52 @@
+name: brain_microproteins
+channels:
+  - conda-forge
+  - bioconda
+  - r
+dependencies:
+  # Python environment
+  - python>=3.10
+  - pip
+
+  # Core Python packages
+  - pandas>=1.5.0
+  - numpy>=1.21.0
+  - scipy>=1.9.0
+  - matplotlib>=3.5.0
+  - seaborn>=0.11.0
+  - scikit-image>=0.20.0
+  - tifffile>=2023.0.0
+
+  # Bioinformatics tools
+  - bedtools>=2.30.0
+  - pybedtools>=0.9.0
+
+  # R environment
+  - r-base>=4.2.0
+  - r-essentials
+
+  # R packages for the analysis pipeline
+  - bioconductor-deseq2
+  - bioconductor-limma
+  - bioconductor-biomart
+  - bioconductor-org.hs.eg.db
+  - bioconductor-annotationdbi
+  - r-dplyr
+  - r-tibble
+  - r-ggplot2
+  - r-plotly
+  - r-patchwork
+  - r-ggpubr
+  - r-psych
+  - r-scales
+
+  # Pip-only packages (dashboard + supplemental tables + PROSIT)
+  - pip:
+    - streamlit>=1.28.0
+    - plotly>=5.17.0
+    - pathlib2>=2.3.7
+    - openpyxl>=3.0.0
+    - tqdm>=4.65.0
+    - pyteomics>=4.6
+    - nd2reader>=3.3.0
+    # - koinapy>=0.0.6   # PROSIT, requires koina.wilhelmlab.org access
