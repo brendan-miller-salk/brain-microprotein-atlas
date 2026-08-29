@@ -1,0 +1,105 @@
+# UCSC custom tracks: adult brain DLPFC ribosome profiling, ESPRESSO long-read
+# isoform coverage, and smORF peptide / ORF-rules annotation. Genome: hg38.
+#
+# To load: UCSC Genome Browser -> My Data -> Custom Tracks -> paste this file's
+# contents (or upload it), with hg38 selected.
+#
+# Track data streams from the public dataset
+# huggingface.co/datasets/brmiller/brain-microprotein-atlas (browser_tracks/).
+#
+# Adult Brain DLPFC tracks: ribosome profiling, ESPRESSO long-read isoform
+# coverage, and smORF peptide / ORF-rules annotation.
+#
+# Display settings: Pack, graph type Bar, height 32px, no data transform
+# (linear), Mean+whiskers windowing, smoothing off, alwaysZero off,
+# track color black (#000000).
+#
+# autoScale=on is used instead of a fixed viewLimits because the three bigWigs
+# live on very different scales (Ribo-seq averages ~0.01-0.02 over covered
+# bases, ESPRESSO CPM averages ~34). A single fixed range cannot serve both,
+# and on a linear scale a low ceiling clips nearly everything. To pin a range
+# instead, drop autoScale and set e.g. viewLimits=0:5 (Ribo) / 0:500 (ESPRESSO).
+
+track type=bigWig name="DLPFC Ribo (Fw)" description="Adult Brain Ribosome Profiling (Forward Strand)" visibility=pack graphType=bar maxHeightPixels=128:32:11 autoScale=on alwaysZero=off windowingFunction=mean+whiskers smoothingWindow=off color=0,0,0 priority=1 bigDataUrl=https://huggingface.co/datasets/brmiller/brain-microprotein-atlas/resolve/main/browser_tracks/adult_brain_riboseq_merged.fwd.bw
+
+track type=bigWig name="DLPFC Ribo (Rev)" description="Adult Brain Ribosome Profiling (Reverse Strand)" visibility=pack graphType=bar maxHeightPixels=128:32:11 autoScale=on alwaysZero=off windowingFunction=mean+whiskers smoothingWindow=off color=0,0,0 priority=2 bigDataUrl=https://huggingface.co/datasets/brmiller/brain-microprotein-atlas/resolve/main/browser_tracks/adult_brain_riboseq_merged.rev.bw
+
+# ESPRESSO DLPFC long-read isoform expression (12 ROSMAP samples, median CPM >= 0.5).
+#
+# The per-isoform bigBed colours on log1p(mean CPM): navy (low) -> grey (mid) ->
+# firebrick (high). Ceiling is the 99th percentile of mean CPM (348), not the max
+# (53,120) - a hard max would flatten everything below the top few loci into one
+# flat band. Note this is a diverging ramp on a sequential quantity, so both ends
+# are dark; they stay separable by hue (navy is blue-dominant, firebrick red-
+# dominant, 2.3x apart in greyscale) but low and high are NOT distinguishable by
+# darkness alone. Click a feature for meanCPM/medianCPM/maxCPM/nSamples/geneName.
+#
+# The .bw above sums all overlapping isoforms per base, so use the .bb for
+# per-isoform attribution; the .bw only answers "where is there signal".
+# Colour ramp lives in espresso/make_isoform_hub.py (expression_color).
+
+track type=bigWig name="DLPFC ESPRESSO (CPM)" description="ESPRESSO isoform coverage, mean CPM across 12 DLPFC samples" visibility=pack graphType=bar maxHeightPixels=128:32:11 autoScale=on alwaysZero=off windowingFunction=mean+whiskers smoothingWindow=off color=0,0,0 priority=3 bigDataUrl=https://huggingface.co/datasets/brmiller/brain-microprotein-atlas/resolve/main/browser_tracks/espresso_dlpfc_mean_cpm.bw
+track type=bigBed name="DLPFC ESPRESSO Isoforms" description="ESPRESSO isoforms colored by mean CPM (navy=low, grey=mid, firebrick=high; click a feature for per-isoform CPM)" visibility=pack itemRgb=on priority=4 bigDataUrl=https://huggingface.co/datasets/brmiller/brain-microprotein-atlas/resolve/main/browser_tracks/espresso_dlpfc_isoforms.bb
+
+
+# smORF peptide evidence: PROSIT-graded tryptic peptides projected to the genome.
+# bigGenePred, so UCSC translates the CDS and draws the amino-acid letters the
+# same way it does for GENCODE, while itemRgb carries the PROSIT confidence tier.
+# The amino-acid letters come from baseColorDefault=genomicCodons on the track line.
+# They are a DISPLAY setting, not something in the file - this is documented for custom
+# tracks in UCSC's own bigGenePred example ("Display Amino Acids and Codon Numbers").
+# Equivalently, right-click the track -> Configure -> "Color track by codons" ->
+# "genomic codons", and tick "Show codon numbering".
+# green=Strong (1,177)  gold=Moderate (1,710)  firebrick=Weak (417)
+# grey=Insufficient/ungraded (550).  3,854 peptides, every one verified to
+# translate to its expected residues from hg38.  Built by transcript_rules/make_psm_biggenepred.sh (Box).
+
+track type=bigGenePred baseColorDefault=genomicCodons name="smORF PROSIT Peptides" description="PROSIT-graded peptides on smORFs, colored by confidence (green=Strong gold=Moderate firebrick=Weak grey=Insufficient)" visibility=pack itemRgb=on priority=5 bigDataUrl=https://huggingface.co/datasets/brmiller/brain-microprotein-atlas/resolve/main/browser_tracks/smorf_psm_peptides.bb
+
+# smORF transcript-architecture ORF rules: each smORF colored by its predicted
+# decay fate from nmd_analysis/ (Box) crossed with whether the host gene's main
+# ORF is disrupted in the transcripts that carry it.
+# bigGenePred with itemRgb: the CDS frames let UCSC draw the amino acids, exactly
+# as on the peptide track. It was previously plain BED12/type=bigBed, which has no
+# frame column - so no track-line setting could make it show residues.
+#
+# Two decay rules, scored in this order:
+#   NSD (non-stop decay) - the ORF runs off the transcript with no in-frame stop.
+#     Unlike NMD this CANNOT be judged from a single transcript, so it is decided
+#     per smORF over the whole compatible set: at least one confident no-stop
+#     transcript AND no transcript carrying a real stop codon. 21 smORFs have a
+#     confident no-stop transcript but are ruled out by that contradiction and
+#     stay green/gold/firebrick; nsd_gate_reason in the assignments TSV records
+#     which. NSD overrides the NMD call, so it is a third decay state, not a
+#     fifth colour.
+#   NMD - the stop codon trips the 50-nt rule on a representative transcript.
+#
+# NOTE the green/gold/firebrick trio is shared with the PROSIT peptide track
+# above, where those colours mean something else entirely (firebrick = "Weak
+# PROSIT match" there, "NMD, ORF intact" here). Kept deliberately - it is the
+# published palette. The two purples are deliberately OUTSIDE that shared set,
+# so an NSD call is never ambiguous when both tracks are loaded together. UCSC
+# has no per-track background colour (no bgColor setting), so if the two tracks
+# ever need separating further, the way to do it is to move one to a different
+# hue family.
+# dark green   0,100,0     no NMD, main ORF disrupted   (3,096)
+# light green  144,238,144 no NMD, main ORF intact      (1,044)
+# gold         255,215,0   NMD, main ORF disrupted        (771)
+# firebrick    178,34,34   NMD, main ORF intact           (444)
+# dark purple  106,61,154  NSD, main ORF disrupted        (183)
+# light purple 188,158,217 NSD, main ORF intact             (83)
+# grey         128,128,128 no data                         (47)
+# Source BED is alongside as smorf_trx_priority_color_class.bed; the .bb is what
+# UCSC loads. Built by transcript_rules/make_orf_rules_biggenepred.sh, which verifies
+# every CDS frame against the genome (120 TrEMBL records needed correcting; all
+# 5,621 coding features now translate to a clean ORF with no internal stop).
+# Those 120 are itemised in trembl_cds_rephase.tsv alongside - every one had at
+# least one internal stop in its annotated frame and none ended in a stop codon;
+# 51 were shifted by 1 nt and 69 by 2.
+# Each thick (CDS) region now runs through its stop codon, so UCSC draws the
+# terminal * residue: 4,933 records were extended, either onto an annotated
+# GENCODE stop_codon feature or onto the next genomic triplet walked along the
+# parent exon chain (the two routes agree wherever both apply). Records whose
+# model is 3'-incomplete are left as they were - a stop is not invented.
+
+track type=bigGenePred baseColorDefault=genomicCodons name="smORF Rules" description="smORFs colored by decay rule and main-ORF status (dark green=no NMD/ORF disrupted, light green=no NMD/ORF intact, gold=NMD/ORF disrupted, firebrick=NMD/ORF intact, dark purple=NSD/ORF disrupted, light purple=NSD/ORF intact, grey=no data)" visibility=pack itemRgb=on priority=6 bigDataUrl=https://huggingface.co/datasets/brmiller/brain-microprotein-atlas/resolve/main/browser_tracks/smorf_trx_priority_color_class.bb

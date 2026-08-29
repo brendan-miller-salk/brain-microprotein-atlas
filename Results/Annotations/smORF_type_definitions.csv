@@ -1,0 +1,12 @@
+General smORF Type,smORF Type,Definition
+Upstream ORF,uORF,Upstream smORF located in the 5' UTR of a canonical protein-coding transcript
+Upstream ORF,uaORF,"Upstream smORF present only in a subset of transcript isoforms, leading to ambiguous classification"
+Upstream ORF,uoORF,Upstream smORF that overlaps the initiation codon of a canonical protein-coding sequence
+Upstream ORF,uaoORF,"Upstream smORF that ambiguously overlaps the initiation codon of a canonical protein-coding sequence; ambiguity arises from transcript isoforms that may lack the canonical start codon"
+Downstream ORF,dORF,Downstream smORF located in the 3' UTR of a canonical protein-coding transcript
+Downstream ORF,doORF,Downstream overlapping smORF that extends into or overlaps the canonical coding sequence from the 3' region
+Downstream ORF,daoORF,"Downstream ambiguously overlapping smORF; overlap with the canonical coding sequence depends on transcript isoform structure"
+Internal ORF,iORF,smORF encoded entirely within the canonical protein-coding sequence region in an alternative reading frame
+lncRNA,lncRNA,smORF encoded within an annotated long noncoding RNA
+Pseudogene ORF,psORF,Pseudogene-derived ORF
+Alternative Frame ORF,AltORF / TrEMBL,"smORF encoded by an alternative reading frame, often arising from alternative splicing and/or supported by entries in the UniProt TrEMBL database" scientific conclusions."
