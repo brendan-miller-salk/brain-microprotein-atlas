@@ -128,14 +128,31 @@ The composite tier is written to the `Confidence` column of
    `SA_normalized`, `SA_rating`, `Match_coverage`, `Match_coverage_pct`
    (% of unique backbone cleavage sites evidenced by matched b/y ions),
   `Confidence`, `Candidates_evaluated`, `Selected_Spectrum`,
-  `Selected_Batch`, `Acetyl_Rescued`).
+  `Selected_Batch`, `Acetyl_Rescued`), plus 24 b/y coverage columns for the
+  selected PSM: `ladder_*` (matched against a theoretical b/y ladder built
+  from FragPipe's `Assigned Modifications`, 20 ppm, fragment z <= precursor
+  z - 1, round-specific reporter window) and `prosit_*` (the PROSIT-matched
+  ions). Each set gives `b_/y_/by_union_coverage_pct`, `longest_b/y/by_run`,
+  `full_b_ladder`, `full_y_ladder`, `full_by_union`, `consec5` (>= 5
+  consecutive b or y ions) and ion counts. Use `ladder_*` for b-ion
+  coverage: PROSIT rarely predicts low-order b ions.
+- `matched_ions.csv.gz` - one row per theoretical b/y ion of each selected
+  PSM (theoretical/observed m/z, ppm error, PROSIT-predicted/matched flags).
 - `cleaned_tryptic_peptides_detailed_under_151aa_with_SA.csv` -
-  bracket-aligned per-protein metrics merged back onto the input CSV.
+  bracket-aligned per-protein metrics merged back onto the input CSV
+  (`--annotate-only`): the five PROSIT metrics plus
+  `ladder_b/y/by_union_coverage_pct`, `ladder_longest_by_run`,
+  `ladder_consec5`.
 - `mirror_plots/{Strong,Moderate,Weak,Insufficient}/*.{png,pdf}` -
   per-peptide 3-panel diagnostic figures.
 
 ### 3. Results Summary
-- **`Proteomics_Results_summary.py`** - Generates final summary tables and statistics
+- **`Proteomics_Results_summary.py`** - Generates final summary tables and statistics.
+  Appends b/y fragment-ion coverage from
+  `Code/data/cleaned_tryptic_peptides_detailed_under_151aa_with_SA.csv`:
+  per-peptide bracketed `ladder_*` lists aligned with `peptide_sequence`, plus
+  per-microprotein `max_ladder_by_union_coverage_pct`,
+  `max_ladder_longest_by_run` and `n_peptides_ladder_consec5`.
 
 ## Usage
 

@@ -33,7 +33,7 @@ as the `R_TEMPLATE` string, for the R-based modules.
 | `nanopore_metadata.csv` | 397 B | `Longread_RNA_analysis/` |
 | `cleaned_tryptic_peptides_under_151aa.csv` | 639 K | `Results/generate_supplemental_tables.py` |
 | `cleaned_tryptic_peptides_detailed_under_151aa.csv` | 714 K | `Peptide_TMT_analysis/prosit/` |
-| `cleaned_tryptic_peptides_detailed_under_151aa_with_SA.csv` | 997 K | `Microprotein_annotation_summary/alt_proteoform_records.py`; PROSIT-annotated output of the above |
+| `cleaned_tryptic_peptides_detailed_under_151aa_with_SA.csv` | 1.2 M | `Microprotein_annotation_summary/alt_proteoform_records.py`; PROSIT-annotated output of the above |
 | `ac_list_mapping.csv` | 87 K | `scRNAseq_summary_merging_analysis/` |
 | `alt_proteoform_table.csv` | 550 K | `Microprotein_annotation_summary/Create_Alt_Proteoform_Files.py` |
 | `codon_context_sequences.csv.gz` | 343 K | `Codon_context/` |

@@ -254,6 +254,29 @@ RNA_SIG_EMOJI = {
 # upstream, so they legitimately carry 'NA'.
 DECAY_CLASS_TSV = (Path(__file__).resolve().parent.parent / "Code" / "data" /
                    "smorf_trx_priority_color_class_assignments.tsv")
+# Per-peptide b/y fragment-ion coverage of each peptide's PROSIT-selected PSM,
+# bracket-aligned with peptide_sequence (prosit_pipeline.py --annotate-only).
+# ladder_* = matched against the theoretical b/y ladder, so b-ion coverage is
+# real rather than limited to the ions PROSIT happens to predict.
+LADDER_CSV = (Path(__file__).resolve().parent.parent / "Code" / "data" /
+              "cleaned_tryptic_peptides_detailed_under_151aa_with_SA.csv")
+LADDER_LIST_COLS = ['ladder_b_coverage_pct', 'ladder_y_coverage_pct',
+                    'ladder_by_union_coverage_pct', 'ladder_longest_by_run',
+                    'ladder_consec5']
+# Evidence & Quality "Fragment-Ion Coverage" facet: stable token -> (label,
+# rollup column, help). A microprotein passes if ANY of its peptides does.
+FRAG_COV_LEVELS = {
+    'consec5': ('≥5 consecutive b/y ions', 'Ladder_Any_Consec5',
+                "At least one peptide shows a run of ≥5 consecutive b or y ions "
+                "(Slavoff et al., 2012). Ticked boxes are OR'd."),
+    'full_union': ('Full b/y coverage', 'Ladder_Any_Full_Union',
+                   "At least one peptide has every backbone cleavage site covered "
+                   "by a matched b or y ion."),
+    'full_b': ('Full b-ion ladder', 'Ladder_Any_Full_B',
+               "At least one peptide has every b ion (b1..b(n-1)) matched."),
+    'full_y': ('Full y-ion ladder', 'Ladder_Any_Full_Y',
+               "At least one peptide has every y ion (y1..y(n-1)) matched."),
+}
 DECAY_CLASS_LEVELS = ['No NMD · mORF Shift', 'No NMD · mORF Intact',
                       'NMD · mORF Shift', 'NMD · mORF Intact',
                       'NSD · mORF Shift', 'NSD · mORF Intact', 'NA']
@@ -1810,6 +1833,56 @@ def load_analysis_results():
             if v is not None and v.get("df") is not None}
 
 
+def _load_ladder_rollups():
+    """Per-microprotein b/y fragment-ion coverage rollups from LADDER_CSV.
+
+    Returns one row per sequence: the per-peptide lists (aligned with
+    Tryptic_Peptides) plus best/longest/any rollups over the peptides, or None
+    if the file or its ladder columns are missing.
+    """
+    if not LADDER_CSV.exists():
+        return None
+    try:
+        lad = pd.read_csv(LADDER_CSV, usecols=['sequence'] + LADDER_LIST_COLS)
+    except ValueError:
+        return None  # file predates the ladder columns
+
+    def _parse(cell):
+        if not _not_na(cell):
+            return []
+        try:
+            vals = ast.literal_eval(str(cell))
+        except (ValueError, SyntaxError):
+            return []
+        return list(vals) if isinstance(vals, (list, tuple)) else [vals]
+
+    rows = []
+    for seq, b, y, u, run, c5 in lad[['sequence'] + LADDER_LIST_COLS].itertuples(
+            index=False, name=None):
+        b, y, u, run, c5 = (_parse(b), _parse(y), _parse(u), _parse(run),
+                            _parse(c5))
+        uv = [v for v in u if v is not None]
+        rv = [v for v in run if v is not None]
+        c5v = [bool(v) for v in c5 if v is not None]
+        rows.append({
+            'sequence': seq,
+            'Ladder_Union_Pct_List': u,
+            'Ladder_Best_Union_Pct': max(uv) if uv else np.nan,
+            'Ladder_Longest_Run': max(rv) if rv else np.nan,
+            'Ladder_N_Consec5': sum(c5v) if c5v else np.nan,
+            'Ladder_Any_Consec5': any(c5v),
+            'Ladder_Any_Full_Union': any(v == 100 for v in uv),
+            'Ladder_Any_Full_B': any(v == 100 for v in b if v is not None),
+            'Ladder_Any_Full_Y': any(v == 100 for v in y if v is not None),
+        })
+    out = pd.DataFrame(rows)
+    # Per-peptide coverage, formatted like _Tryptic_Display so the two read
+    # side by side ('—' = peptide without a selected PSM).
+    out['_Ladder_Display'] = out.pop('Ladder_Union_Pct_List').map(
+        lambda vs: ' · '.join('—' if v is None else f"{v:g}" for v in vs))
+    return out.drop_duplicates('sequence')
+
+
 @st.cache_data(show_spinner=False)
 def load_and_merge_all_data():
     """Merge every analysis view by sequence, anchored on the master dataset.
@@ -1848,6 +1921,10 @@ def load_and_merge_all_data():
         )
     else:
         master_df['Nt_Acetylated'] = False
+
+    _ladder = _load_ladder_rollups()
+    if _ladder is not None:
+        master_df = master_df.merge(_ladder, on='sequence', how='left')
 
     for analysis_name, info in analysis_files.items():
         df = info.get('df')
@@ -1987,6 +2064,21 @@ def _peptide_count_series(df):
     if 'Tryptic_Peptides' in df.columns:
         return df['Tryptic_Peptides'].map(_count_peptides).astype(int)
     return None
+
+
+def _frag_cov_series(df, token):
+    """Boolean Fragment-Ion Coverage flag for `token` (see FRAG_COV_LEVELS),
+    derived on the fly if a stale cached frame predates the rollup columns."""
+    col = FRAG_COV_LEVELS[token][1]
+    if col in df.columns:
+        return df[col].fillna(False).astype(bool)
+    if 'sequence' not in df.columns:
+        return None
+    lad = _load_ladder_rollups()
+    if lad is None:
+        return None
+    flags = lad.set_index('sequence')[col]
+    return df['sequence'].map(flags).fillna(False).astype(bool)
 
 
 def extract_unified_fields(master_df):
@@ -2386,6 +2478,8 @@ def _source_csv_paths():
         # smORF decay-class assignments (NMD × main-ORF disruption); also in
         # Code/data so the parquet fingerprint invalidates when it changes.
         DECAY_CLASS_TSV,
+        # Per-peptide b/y fragment-ion coverage (Fragment-Ion Coverage facet).
+        LADDER_CSV,
     ]
 
 
@@ -2952,6 +3046,7 @@ def main():
         selected_ribo = _sel('f_ribo', _dom_ribo)
         selected_quality = _sel('f_quality', _dom_quality)
         selected_min_peptides = _sel('f_min_peptides', MIN_PEPTIDE_TIERS)
+        selected_frag = _sel('f_frag', list(FRAG_COV_LEVELS))
         selected_decay = _sel('f_decay', _dom_decay)
         selected_shortstop = _sel('f_shortstop', _dom_shortstop)
         selected_tmt_sig = _sel('f_tmt_sig', _dom_tmt_sig)
@@ -3036,6 +3131,14 @@ def main():
             _pc = _peptide_count_series(base_df)
             if _pc is not None:
                 _add_mask('peptides', _pc >= min(selected_min_peptides))
+        # Fragment-ion coverage: ticked boxes are OR'd, like Ribosome Coverage.
+        _frag_any = None
+        for _tok in selected_frag:
+            _m = _frag_cov_series(base_df, _tok)
+            if _m is None:
+                continue
+            _frag_any = _m if _frag_any is None else (_frag_any | _m)
+        _add_mask('frag', _frag_any)
         if selected_decay and _col('NMD_Decay_Class') is not None:
             _add_mask('decay', base_df['NMD_Decay_Class'].isin(selected_decay))
         if selected_shortstop and _col('ShortStop_Label') is not None:
@@ -3174,6 +3277,13 @@ def main():
                                       "variants count as distinct sequences). Tiers are nested, "
                                       "so ticking several is the same as ticking the lowest."
                                       if _i == 0 else None))
+            st.markdown("**Fragment-Ion Coverage**")
+            _fv = _narrow(skip='frag')
+            for _tok, (_lbl, _c, _hlp) in FRAG_COV_LEVELS.items():
+                _m = _frag_cov_series(_fv, _tok)
+                _count_checkbox(f"f_frag_{_tok}", _lbl,
+                                int(_m.sum()) if _m is not None else 0,
+                                help=_hlp)
 
         # ── Differential Expression ──
         # Checkbox facets like the rest of the sidebar: the checkbox *key* carries
@@ -3433,6 +3543,9 @@ def main():
         _active_chips.append(("Spectra quality", ", ".join(map(str, selected_quality))))
     if selected_min_peptides:
         _active_chips.append(("Peptides", f"≥{min(selected_min_peptides)}"))
+    if selected_frag:
+        _active_chips.append(("Fragment ions", ", ".join(
+            FRAG_COV_LEVELS[t][0] for t in selected_frag)))
     if selected_ribo:
         _active_chips.append(("Ribosome coverage", ", ".join(map(str, selected_ribo))))
     if selected_tmt_sig:
@@ -3579,6 +3692,10 @@ def main():
         'Psites_pct_frame2': 'P-site % Frame 2',
         'Psites_frame0_RPKM': 'P-site Frame 0 RPKM',
         'Tryptic_Peptides': 'Tryptic Peptides',
+        '_Ladder_Display': 'b/y Coverage % per Peptide',
+        'Ladder_Best_Union_Pct': 'Best b/y Coverage %',
+        'Ladder_Longest_Run': 'Longest b/y Run',
+        'Ladder_N_Consec5': 'Peptides ≥5 Consec b/y',
         'Tryptic_Protein_ID': 'Tryptic Protein ID',
         'Tryptic_Start_Positions': 'Tryptic Start Positions',
         'Tryptic_End_Positions': 'Tryptic End Positions',
@@ -3764,7 +3881,8 @@ def _render_results_table(filtered_df, display_df):
             'TMT CI low (0%)', 'TMT CI high (0%)', "TMT Cohen's d (0%)",
             'TMT p-val (0%)', 'TMT q-val (0%)',
             'MS Detect Control', 'MS Detect AD', 'TMT Tier', 'Spectra Quality',
-            'Tryptic Peptides', 'Tryptic Protein ID',
+            'Best b/y Coverage %', 'Longest b/y Run', 'Peptides ≥5 Consec b/y',
+            'Tryptic Peptides', 'b/y Coverage % per Peptide', 'Tryptic Protein ID',
             'Tryptic Start Positions', 'Tryptic End Positions',
             'Nt-Acetylated', 'Nt-Acetyl Peptides', 'Nt-Acetyl PSMs',
             'Nt-Acetyl PSM Fraction',
@@ -3936,6 +4054,10 @@ def _render_results_table(filtered_df, display_df):
             'Nt-Acetyl PSMs': st.column_config.NumberColumn('Nt-Acetyl PSMs', help='Total Nt-acetylated PSMs summed across the Nt-acetylated peptides', format='%d'),
             'Nt-Acetyl PSM Fraction': st.column_config.NumberColumn('Nt-Acetyl PSM Fraction', help='Highest per-peptide fraction of that peptide’s PSMs that carry the Nt-acetyl mark (1.0 = every PSM acetylated)', format='%.3f'),
             'Spectra Quality': st.column_config.TextColumn('Spectra Quality', help='Best Prosit spectral-match confidence tier (from the master Confidence column)', max_chars=20),
+            'Best b/y Coverage %': st.column_config.NumberColumn('Best b/y Coverage %', help='Highest per-peptide % of backbone cleavage sites covered by a matched b or y ion (theoretical b/y ladder, 20 ppm, PROSIT-selected PSM)', format='%.1f'),
+            'Longest b/y Run': st.column_config.NumberColumn('Longest b/y Run', help='Longest run of consecutive matched b or y ions on any peptide', format='%d'),
+            'Peptides ≥5 Consec b/y': st.column_config.NumberColumn('Peptides ≥5 Consec b/y', help='Number of peptides with ≥5 consecutive matched b or y ions (Slavoff et al., 2012)', format='%d'),
+            'b/y Coverage % per Peptide': st.column_config.TextColumn('b/y Coverage % per Peptide', help='b/y cleavage-site coverage of each tryptic peptide, in the same order as Tryptic Peptides (— = no selected PSM)', max_chars=40),
             'BLAST UniProt Match': st.column_config.TextColumn('BLAST UniProt Match', help='UniProt accession of the best BLASTp hit', max_chars=15),
             'BLAST % Match': st.column_config.NumberColumn('BLAST % Match', help='BLASTp percent identity to the best UniProt hit', format='%.1f'),
             'BLAST Aln Length': st.column_config.NumberColumn('BLAST Aln Length', help='BLASTp alignment length (residues)', format='%d'),

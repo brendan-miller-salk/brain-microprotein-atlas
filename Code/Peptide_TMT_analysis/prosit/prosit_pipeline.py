@@ -83,6 +83,14 @@ PPM_TOLERANCE = 20.0
 CLEAR_MZ_LO = 125.5
 CLEAR_MZ_HI = 131.5
 
+# b/y coverage (theoretical ladder; independent of PROSIT)
+CLEAR_MZ_HI_TMTPRO = 134.5   # round-2 clear-mz-hi (TMTpro 16-plex reporters)
+PROTON_MASS = 1.007276
+H2O_MASS = 18.010565
+CYS_CAM_MASS = 57.02146      # fixed C carbamidomethyl
+TMT_MASS = 229.16293         # fixed K, round 1 (TMT 6/10-plex)
+TMTPRO_MASS = 304.20715      # fixed K, round 2 (TMTpro 16-plex)
+
 # Representative selection
 MIN_PURITY = 0.5
 MAX_CANDIDATES = 5
@@ -318,20 +326,28 @@ def get_candidate_psms(workspace, all_pep_df):
 # =============================================================================
 # Phase 1 — Step 4: Convert FragPipe mods to PROSIT UNIMOD format
 # =============================================================================
-def parse_fragpipe_mods(modified_peptide, assigned_mods):
+# Reagent UNIMOD codes
+TMT_UNIMOD    = "UNIMOD:737"   # TMT 6/10-plex (+229.16 Da)  — round 1
+TMTPRO_UNIMOD = "UNIMOD:2016"  # TMTpro 16-plex (+304.21 Da) — round 2
+
+def parse_fragpipe_mods(modified_peptide, assigned_mods, batch=None):
     """
     Convert FragPipe Modified Peptide to PROSIT-formatted sequence.
     Returns PROSIT-ready sequence string, or None if unparseable/unsupported.
+
+    Reagent is detected from the N-term mass tag (n[230] -> TMT 6/10,
+    n[305] -> TMTpro). For PSMs with no N-term tag (incomplete labeling),
+    falls back to the batch label: 'round2/...' -> TMTpro, else TMT.
+    The same reagent is applied to every K residue (K is statically labeled).
     """
     if pd.isna(modified_peptide):
         return None
 
     mod_pep = str(modified_peptide).strip()
 
-    # --- N-terminal modification ---
-    nterm_tag = "[UNIMOD:737]-"  # default: TMT
+    # --- Determine reagent from N-term tag ---
     bare_seq = mod_pep
-
+    reagent = None
     nterm_match = re.match(r'^n\[(\d+)\](.+)$', mod_pep)
     if nterm_match:
         nterm_mass = int(nterm_match.group(1))
@@ -340,9 +356,21 @@ def parse_fragpipe_mods(modified_peptide, assigned_mods):
             # N-term acetylation — not supported by PROSIT TMT model
             return None
         elif nterm_mass == 230:
-            nterm_tag = "[UNIMOD:737]-"
+            reagent = TMT_UNIMOD
+        elif nterm_mass == 305:
+            reagent = TMTPRO_UNIMOD
         else:
-            nterm_tag = "[UNIMOD:737]-"
+            # Unknown N-term mass — refuse rather than silently mis-label
+            return None
+    else:
+        # No N-term tag — infer reagent from batch (TMTpro for round 2)
+        if isinstance(batch, str) and batch.startswith("round2"):
+            reagent = TMTPRO_UNIMOD
+        else:
+            reagent = TMT_UNIMOD
+
+    nterm_tag = f"[{reagent}]-"
+    k_tag     = f"K[{reagent}]"
 
     # --- Build residue-by-residue ---
     result = []
@@ -361,7 +389,7 @@ def parse_fragpipe_mods(modified_peptide, assigned_mods):
         if aa == 'C':
             result.append("C[UNIMOD:4]")
         elif aa == 'K':
-            result.append("K[UNIMOD:737]")
+            result.append(k_tag)
         elif aa == 'M' and inline_mod == 147:
             result.append("M[UNIMOD:35]")
         else:
@@ -707,6 +735,477 @@ def compute_unique_cleavages(matched_idxs, pred_ann, peptide_len):
     return len(sites), max(peptide_len - 1, 1)
 
 
+# =============================================================================
+# Phase 2 — b/y fragment-ion coverage (theoretical ladder and PROSIT matches)
+# =============================================================================
+COVERAGE_METRICS = [
+    "b_coverage_pct", "y_coverage_pct", "by_union_coverage_pct",
+    "longest_b_run", "longest_y_run", "longest_by_run",
+    "full_b_ladder", "full_y_ladder", "full_by_union", "consec5",
+    "n_theoretical_ions", "n_matched_theoretical",
+]
+COVERAGE_BOOL_METRICS = {"full_b_ladder", "full_y_ladder", "full_by_union",
+                         "consec5"}
+COVERAGE_KEYS = [f"{prefix}_{m}" for prefix in ("ladder", "prosit")
+                 for m in COVERAGE_METRICS]
+COVERAGE_DEFAULTS = {k: None for k in COVERAGE_KEYS}  # immutable values only
+ION_COLUMNS = [
+    "peptide", "protein_id", "Selected_Spectrum", "Selected_Batch",
+    "ion_type", "ordinal", "frag_charge", "theo_mz", "obs_mz", "obs_int",
+    "ppm_err", "matched", "prosit_predicted", "prosit_matched", "prosit_mz",
+]
+
+_AM_RESIDUE_RE = re.compile(r"^(\d+)([A-Z])\((-?\d+(?:\.\d+)?)\)$")
+_AM_NTERM_RE = re.compile(r"^N-term\((-?\d+(?:\.\d+)?)\)$")
+
+
+def _is_round2(batch):
+    return isinstance(batch, str) and batch.startswith("round2/")
+
+
+def _coverage_errors_path(ions_out):
+    """coverage_errors[_test].tsv next to matched_ions[_test].csv.gz."""
+    name = os.path.basename(ions_out).replace("matched_ions", "coverage_errors")
+    return os.path.join(os.path.dirname(ions_out),
+                        name.replace(".csv.gz", ".tsv"))
+
+
+def parse_assigned_mods(assigned_mods, peptide=None, batch=None):
+    """
+    Parse FragPipe 'Assigned Modifications', e.g.
+    'N-term(304.2072),14C(57.0215),32K(304.2072),6M(15.9949)'.
+    Positions are 1-based and tokens are not in positional order.
+    Returns ({0-based position: delta}, nterm_delta), masses from the string.
+    A missing N-term entry means an unlabelled N-terminus (N-term TMT is a
+    variable mod), so nterm_delta is 0.0.  With `peptide`, residue letters are
+    checked and fixed C/K mods are added if missing (TMTpro for round2/).
+    """
+    mods, nterm = {}, 0.0
+    if isinstance(assigned_mods, str):
+        for tok in assigned_mods.split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            m = _AM_RESIDUE_RE.match(tok)
+            if m:
+                pos = int(m.group(1)) - 1
+                if peptide is not None:
+                    if not 0 <= pos < len(peptide):
+                        raise ValueError(f"mod position out of range: {tok} "
+                                         f"in {peptide}")
+                    if peptide[pos] != m.group(2):
+                        raise ValueError(f"mod residue mismatch: {tok} "
+                                         f"in {peptide}")
+                mods[pos] = mods.get(pos, 0.0) + float(m.group(3))
+                continue
+            m = _AM_NTERM_RE.match(tok)
+            if m:
+                nterm += float(m.group(1))
+                continue
+            raise ValueError(f"unparsed Assigned Modifications token: {tok!r}")
+    if peptide is not None:
+        k_mass = TMTPRO_MASS if _is_round2(batch) else TMT_MASS
+        for i, aa in enumerate(peptide):
+            if i not in mods:
+                if aa == "C":
+                    mods[i] = CYS_CAM_MASS
+                elif aa == "K":
+                    mods[i] = k_mass
+    return mods, nterm
+
+
+def theoretical_by_ladder(peptide, mods, nterm_delta, precursor_charge):
+    """
+    Theoretical b/y ladder: ordinals 1..n-1, fragment charges
+    1..max(1, precursor_charge - 1) (the same rule that drops PROSIT fragments
+    with charge >= precursor charge).
+    Returns a list of dicts: ion_type, ordinal, frag_charge, theo_mz.
+    """
+    from pyteomics import mass
+    res = [mass.std_aa_mass[aa] + mods.get(i, 0.0)
+           for i, aa in enumerate(peptide)]
+    n = len(res)
+    zmax = max(1, int(precursor_charge) - 1)
+    ladder = []
+    for ion_type in ("b", "y"):
+        for i in range(1, n):
+            if ion_type == "b":
+                neutral = sum(res[:i]) + nterm_delta
+            else:
+                neutral = sum(res[n - i:]) + H2O_MASS
+            for z in range(1, zmax + 1):
+                ladder.append({"ion_type": ion_type, "ordinal": i,
+                               "frag_charge": z,
+                               "theo_mz": (neutral + z * PROTON_MASS) / z})
+    return ladder
+
+
+def match_ladder(ladder, obs_mz, obs_int, ppm_tol, clear_lo=CLEAR_MZ_LO,
+                 clear_hi=CLEAR_MZ_HI):
+    """
+    Match each theoretical ion to its nearest observed peak within ppm_tol.
+    Several ions may share a peak (coverage question; not one-to-one).
+    Ions with theo_mz in [clear_lo, clear_hi] are unmatched by construction,
+    and observed peaks in that window are dropped (on a copy).
+    Adds obs_mz, obs_int, ppm_err (NaN when unmatched) and matched in place.
+    """
+    mz = np.asarray(obs_mz, dtype=np.float64)
+    inten = np.asarray(obs_int, dtype=np.float64)
+    keep = ~((mz >= clear_lo) & (mz <= clear_hi))
+    mz, inten = mz[keep], inten[keep]
+    if len(mz) > 1 and np.any(np.diff(mz) < 0):
+        order = np.argsort(mz, kind="stable")
+        mz, inten = mz[order], inten[order]
+    for ion in ladder:
+        theo = ion["theo_mz"]
+        ion.update(obs_mz=np.nan, obs_int=np.nan, ppm_err=np.nan,
+                   matched=False)
+        if len(mz) == 0 or clear_lo <= theo <= clear_hi:
+            continue
+        k = int(np.searchsorted(mz, theo))
+        best = None
+        for j in (k - 1, k):  # nearest neighbour; ties go to the lower m/z
+            if 0 <= j < len(mz) and (
+                    best is None or abs(mz[j] - theo) < abs(mz[best] - theo)):
+                best = j
+        if abs(mz[best] - theo) <= theo * ppm_tol / 1e6:
+            ion.update(obs_mz=float(mz[best]), obs_int=float(inten[best]),
+                       ppm_err=float((mz[best] - theo) / theo * 1e6),
+                       matched=True)
+    return ladder
+
+
+def _longest_run(ords, n):
+    best = cur = 0
+    for i in range(1, n):
+        cur = cur + 1 if i in ords else 0
+        best = max(best, cur)
+    return best
+
+
+def coverage_stats(b_ords, y_ords, n):
+    """
+    b/y coverage over cleavage sites 1..n-1 (n = peptide length).
+    b_i covers site i, y_j covers site n-j.  Percentages use the same
+    expression as Match_coverage_pct.  If n-1 == 0, everything is 0/False.
+    """
+    sites = n - 1
+    b = {i for i in b_ords if 1 <= i <= sites}
+    y = {j for j in y_ords if 1 <= j <= sites}
+    union = b | {n - j for j in y}
+
+    def pct(k):
+        return round(100.0 * k / max(sites, 1), 1) if sites > 0 else 0.0
+
+    b_run, y_run = _longest_run(b, n), _longest_run(y, n)
+    return {
+        "b_coverage_pct": pct(len(b)),
+        "y_coverage_pct": pct(len(y)),
+        "by_union_coverage_pct": pct(len(union)),
+        "longest_b_run": b_run,
+        "longest_y_run": y_run,
+        "longest_by_run": max(b_run, y_run),
+        "full_b_ladder": sites > 0 and len(b) == sites,
+        "full_y_ladder": sites > 0 and len(y) == sites,
+        "full_by_union": sites > 0 and len(union) == sites,
+        "consec5": max(b_run, y_run) >= 5,
+    }
+
+
+def _coverage_for_best(peptide, best_candidate, obs_mz, obs_int, pred_mz,
+                       pred_ann, best_m_idxs, ppm_tol, row_dict, expected):
+    """
+    ladder_* / prosit_* coverage and per-ion rows for the selected PSM.
+    Works on copies only and never touches the PROSIT-pass arrays.
+    `expected` = (n_clv, Match_coverage_pct, n_match, n_pred) of the PROSIT
+    pass; any disagreement raises.  Returns (cov, ion_rows, used_fallback).
+    """
+    used_fallback = ("Assigned Modifications" not in best_candidate
+                     or "Charge" not in best_candidate)
+    am = best_candidate.get("Assigned Modifications",
+                            row_dict.get("Assigned Modifications"))
+    batch = best_candidate.get("Batch", row_dict.get("Batch"))
+    z_prec = int(best_candidate.get("Charge", row_dict["Charge"]))
+    n = len(peptide)
+
+    # Theoretical ladder vs the selected spectrum (round-dependent window)
+    mods, nterm = parse_assigned_mods(am, peptide, batch)
+    ladder = theoretical_by_ladder(peptide, mods, nterm, z_prec)
+    clear_hi = CLEAR_MZ_HI_TMTPRO if _is_round2(batch) else CLEAR_MZ_HI
+    match_ladder(ladder, obs_mz, obs_int, ppm_tol, CLEAR_MZ_LO, clear_hi)
+
+    # PROSIT ions (charge-filtered) and those matched in the PROSIT pass
+    pred_keys = {}
+    for idx, ann in enumerate(pred_ann):
+        pred_keys[parse_ion_annotation(ann)] = idx
+    if len(pred_keys) != len(pred_ann):
+        raise ValueError("duplicate PROSIT annotations")
+    matched_keys = {parse_ion_annotation(pred_ann[idx]) for idx in best_m_idxs}
+    ladder_keys = {(i["ion_type"], i["ordinal"], i["frag_charge"])
+                   for i in ladder}
+    missing = [k for k in pred_keys if k not in ladder_keys]
+    if missing:
+        raise ValueError(f"prosit_key_not_in_ladder: {missing[:3]}")
+
+    lb = {i["ordinal"] for i in ladder if i["matched"] and i["ion_type"] == "b"}
+    ly = {i["ordinal"] for i in ladder if i["matched"] and i["ion_type"] == "y"}
+    pb = {o for t, o, _ in matched_keys if t == "b"}
+    py = {o for t, o, _ in matched_keys if t == "y"}
+
+    cov = {}
+    for prefix, b_ords, y_ords, n_theo, n_hit in (
+            ("ladder", lb, ly, len(ladder), sum(i["matched"] for i in ladder)),
+            ("prosit", pb, py, len(pred_ann), len(best_m_idxs))):
+        stats = coverage_stats(b_ords, y_ords, n)
+        stats["n_theoretical_ions"] = n_theo
+        stats["n_matched_theoretical"] = n_hit
+        for k, v in stats.items():
+            cov[f"{prefix}_{k}"] = v
+    if set(cov) != set(COVERAGE_KEYS):
+        raise ValueError("coverage key mismatch")
+
+    # prosit_* must reproduce the existing PROSIT-pass numbers exactly
+    exp_n_clv, exp_pct, exp_n_match, exp_n_pred = expected
+    prosit_union = len({o for o in pb if 1 <= o < n}
+                       | {n - o for o in py if 1 <= o < n})
+    if (prosit_union != exp_n_clv
+            or cov["prosit_by_union_coverage_pct"] != exp_pct
+            or len(best_m_idxs) != exp_n_match
+            or len(pred_ann) != exp_n_pred):
+        raise ValueError(
+            f"prosit_mismatch: union {prosit_union} vs {exp_n_clv}, pct "
+            f"{cov['prosit_by_union_coverage_pct']} vs {exp_pct}, matched "
+            f"{len(best_m_idxs)} vs {exp_n_match}, predicted "
+            f"{len(pred_ann)} vs {exp_n_pred}")
+
+    protein_id = str(row_dict.get("protein_id", ""))
+    ion_rows = []
+    for ion in ladder:
+        key = (ion["ion_type"], ion["ordinal"], ion["frag_charge"])
+        p_idx = pred_keys.get(key)
+        ion_rows.append({
+            "peptide": peptide,
+            "protein_id": protein_id,
+            "Selected_Spectrum": best_candidate["Spectrum"],
+            "Selected_Batch": best_candidate["Batch"],
+            "ion_type": ion["ion_type"],
+            "ordinal": ion["ordinal"],
+            "frag_charge": ion["frag_charge"],
+            "theo_mz": ion["theo_mz"],
+            "obs_mz": ion["obs_mz"],
+            "obs_int": ion["obs_int"],
+            "ppm_err": ion["ppm_err"],
+            "matched": ion["matched"],
+            "prosit_predicted": p_idx is not None,
+            "prosit_matched": key in matched_keys,
+            "prosit_mz": float(pred_mz[p_idx]) if p_idx is not None else np.nan,
+        })
+    return cov, ion_rows, used_fallback
+
+
+def _self_test():
+    """Unit checks for the b/y coverage helpers (--self-test). Writes nothing."""
+    from pyteomics import mass
+    results = []
+
+    def check(name, cond):
+        results.append(bool(cond))
+        print(f"  [{'PASS' if cond else 'FAIL'}] {name}")
+
+    def theo(ladder, t, o, z):
+        return next(i["theo_mz"] for i in ladder
+                    if (i["ion_type"], i["ordinal"], i["frag_charge"])
+                    == (t, o, z))
+
+    def raises(fn):
+        try:
+            fn()
+        except ValueError:
+            return True
+        return False
+
+    print("b/y coverage self-test")
+
+    # Ladder masses (synthetic round-1 LGAQLILIK)
+    lad = theoretical_by_ladder("LGAQLILIK", {8: TMT_MASS}, TMT_MASS, 2)
+    check("LGAQLILIK round-1 b1 = 343.2543",
+          round(theo(lad, "b", 1, 1), 4) == 343.2543)
+    check("LGAQLILIK round-1 y1 = 376.2757",
+          round(theo(lad, "y", 1, 1), 4) == 376.2757)
+    check("ladder size 2*(n-1)*max(1,z-1)", len(lad) == 2 * 8 * 1)
+    mods, nt = parse_assigned_mods("N-term(229.1629),9K(229.1629)",
+                                   "LGAQLILIK", "b1")
+    lad = theoretical_by_ladder("LGAQLILIK", mods, nt, 2)
+    check("parsed round-1 string b1 = 343.2542",
+          round(theo(lad, "b", 1, 1), 4) == 343.2542)
+    check("parsed round-1 string y1 = 376.2757",
+          round(theo(lad, "y", 1, 1), 4) == 376.2757)
+    lad = theoretical_by_ladder("PEPTIDEK", {7: TMTPRO_MASS}, TMTPRO_MASS, 3)
+    check("TMTpro y1(K) = 451.3200", round(theo(lad, "y", 1, 1), 4) == 451.32)
+    check("fragment charges 1..z-1",
+          {i["frag_charge"] for i in lad} == {1, 2})
+
+    # Neutral precursor mass vs psm.tsv 'Calculated Peptide Mass' (<= 1 mDa)
+    def neutral(pep, am, batch):
+        m, nterm = parse_assigned_mods(am, pep, batch)
+        return (sum(mass.std_aa_mass[a] for a in pep) + sum(m.values())
+                + nterm + H2O_MASS)
+    for pep, am, batch, cpm, psm in [
+        ("LGAQLILIK", "N-term(304.2072),9K(304.2072)", "round2/b4",
+         1576.0571, "rosmaptmt_r2_b4_39.15261.15261.2"),
+        ("AFIALLK", "N-term(229.1629),7K(229.1629)", "b17",
+         1232.8262, "rushtmt_b17_04.69580.69580.2"),
+        ("MSEASEK", "1M(15.9949),7K(304.2072)", "round2/b11",
+         1100.5343, "rosmaptmt_r2_b11_34.01621.01621.2"),
+    ]:
+        got = neutral(pep, am, batch)
+        check(f"{pep} neutral {got:.4f} vs psm.tsv {cpm} ({psm})",
+              abs(got - cpm) <= 0.001)
+
+    # Assigned Modifications parser
+    m, nt = parse_assigned_mods("N-term(229.1629),20C(57.0215),22K(229.1629)",
+                                "AAAAAAAAAAAAATTTTTTCDK", "b1")
+    check("round-1 string", nt == 229.1629
+          and m == {19: 57.0215, 21: 229.1629})
+    m, nt = parse_assigned_mods("N-term(304.2072),14C(57.0215),3K(304.2072)",
+                                "AAKAAAAAAAAAACR", "round2/b3")
+    check("round-2 string, tokens out of order", nt == 304.2072
+          and m == {13: 57.0215, 2: 304.2072})
+    m, nt = parse_assigned_mods("18K(229.1629)", "AAAAAVGGGIAASSIAAK", "b43")
+    check("no N-term entry -> nterm 0.0", nt == 0.0 and m == {17: 229.1629})
+    m, nt = parse_assigned_mods("N-term(229.1629),14K(229.1629),7S(229.1629)",
+                                "ANPHRWSVGHTMGK", "b43")
+    check("S-TMT overlabel parsed", m.get(6) == 229.1629)
+    m, nt = parse_assigned_mods("1M(15.9949),7K(304.2072)", "MSEASEK",
+                                "round2/b11")
+    check("M-ox, unlabelled N-term", nt == 0.0
+          and m == {0: 15.9949, 6: 304.2072})
+    m, nt = parse_assigned_mods("", "ACK", "round2/b1")
+    check("guard adds fixed C and round-2 K", nt == 0.0
+          and m == {1: CYS_CAM_MASS, 2: TMTPRO_MASS})
+    m, nt = parse_assigned_mods(float("nan"), "ACK", "b1")
+    check("NaN string -> guard only", m == {1: CYS_CAM_MASS, 2: TMT_MASS})
+    m, nt = parse_assigned_mods("N-term(229.1629), 3K(229.1629)", "ACK", "b2")
+    check("', ' separator", nt == 229.1629
+          and m == {1: CYS_CAM_MASS, 2: 229.1629})
+    check("residue mismatch raises",
+          raises(lambda: parse_assigned_mods("2K(229.1629)", "ACK", "b1")))
+    check("position out of range raises",
+          raises(lambda: parse_assigned_mods("9K(229.1629)", "ACK", "b1")))
+    check("unknown token raises",
+          raises(lambda: parse_assigned_mods("C-term(1.0)", "ACK", "b1")))
+
+    # coverage_stats
+    s = coverage_stats(set(range(1, 10)), set(range(1, 10)), 10)
+    check("full ladder", s["full_b_ladder"] and s["full_y_ladder"]
+          and s["full_by_union"] and s["b_coverage_pct"] == 100.0
+          and s["longest_by_run"] == 9 and s["consec5"])
+    s = coverage_stats(set(), set(), 10)
+    check("empty", s["by_union_coverage_pct"] == 0.0
+          and s["longest_by_run"] == 0 and not s["full_by_union"]
+          and not s["consec5"])
+    s = coverage_stats({1, 2, 3, 5, 6, 7, 8, 9}, set(), 10)
+    check("{1,2,3,5..9}, n=10 -> run 5", s["longest_b_run"] == 5
+          and s["consec5"])
+    s = coverage_stats({1, 2, 3, 5, 6, 7, 8, 9}, set(), 9)
+    check("{1,2,3,5..9}, n=9 -> run 4 (ordinal 9 out of range)",
+          s["longest_b_run"] == 4 and not s["consec5"])
+    s = coverage_stats({1}, set(), 2)
+    check("n=2 edge", s["full_b_ladder"] and s["b_coverage_pct"] == 100.0
+          and s["longest_b_run"] == 1)
+    s = coverage_stats(set(), set(), 1)
+    check("n=1 edge (no sites)", s["by_union_coverage_pct"] == 0.0
+          and not s["full_by_union"] and s["longest_by_run"] == 0)
+    s = coverage_stats({1, 2}, {1}, 4)
+    check("union: b_i -> i, y_j -> n-j", s["full_by_union"]
+          and not s["full_b_ladder"] and s["by_union_coverage_pct"] == 100.0)
+    check("pct expression == Match_coverage_pct for all k <= d <= 29", all(
+        coverage_stats(set(range(1, k + 1)), set(), d + 1)["b_coverage_pct"]
+        == round(classify_match_coverage(k, d)[1], 1)
+        for d in range(1, 30) for k in range(0, d + 1)))
+
+    # match_ladder
+    def ion(o, mz):
+        return {"ion_type": "b", "ordinal": o, "frag_charge": 1, "theo_mz": mz}
+    lad = [ion(1, 500.0), ion(2, 500.0), ion(3, 130.0), ion(4, 1000.0),
+           ion(5, 2000.0)]
+    obs = np.array([2000.0 * (1 + 20.1e-6), 130.0, 500.0,
+                    1000.0 * (1 + 19.9e-6)])  # unsorted on purpose
+    obs_before = obs.copy()
+    match_ladder(lad, obs, np.array([1.0, 9.0, 5.0, 3.0]), 20.0)
+    check("two ions share one peak", lad[0]["matched"] and lad[1]["matched"]
+          and lad[0]["obs_int"] == 5.0)
+    check("reporter-window ion unmatched", not lad[2]["matched"])
+    check("19.9 ppm matched", lad[3]["matched"]
+          and abs(lad[3]["ppm_err"] - 19.9) < 1e-6)
+    check("20.1 ppm unmatched", not lad[4]["matched"]
+          and np.isnan(lad[4]["ppm_err"]))
+    check("observed arrays untouched", np.array_equal(obs, obs_before))
+    lad = [ion(1, 500.0)]
+    match_ladder(lad, np.array([]), np.array([]), 20.0)
+    check("empty spectrum -> unmatched", not lad[0]["matched"])
+    lad = [ion(1, 131.4999)]
+    match_ladder(lad, np.array([131.5001]), np.array([1.0]), 20.0)
+    check("in-window ion stays unmatched next to an out-of-window peak",
+          not lad[0]["matched"])
+    lad = [ion(1, 133.0)]
+    match_ladder(lad, np.array([133.0]), np.array([1.0]), 20.0,
+                 CLEAR_MZ_LO, CLEAR_MZ_HI_TMTPRO)
+    check("round-2 window excludes 133.0", not lad[0]["matched"])
+    lad = [ion(1, 1000.0)]
+    match_ladder(lad, np.array([999.99, 1000.01]), np.array([1.0, 2.0]), 20.0)
+    check("tie -> lower m/z peak", lad[0]["matched"]
+          and lad[0]["obs_int"] == 1.0)
+
+    # End-to-end helper on a synthetic PSM: prosit_* == existing PROSIT pass
+    cand = {"Spectrum": "s.1.1.2", "Batch": "b17", "Charge": 2,
+            "Assigned Modifications": "N-term(229.1629),8K(229.1629)"}
+    m, nt = parse_assigned_mods(cand["Assigned Modifications"], "PEPTIDEK",
+                                "b17")
+    full = theoretical_by_ladder("PEPTIDEK", m, nt, 2)
+    pick = [("b", 2, 1), ("b", 3, 1), ("y", 1, 1), ("y", 4, 1)]
+    p_ann = [f"{t}{o}+{z}" for t, o, z in pick]
+    p_mz = np.array([theo(full, t, o, z) for t, o, z in pick])
+    obs = np.sort(p_mz.copy())
+    p_idxs = [0, 1, 2]  # y4 predicted but not matched by the PROSIT pass
+    n_clv, tot = compute_unique_cleavages(p_idxs, p_ann, 8)
+    pct = round(classify_match_coverage(n_clv, tot)[1], 1)
+    cov, rows, fb = _coverage_for_best(
+        "PEPTIDEK", cand, obs, np.ones_like(obs), p_mz, p_ann, p_idxs, 20.0,
+        {"protein_id": "P1", "Charge": 2}, expected=(n_clv, pct, 3, 4))
+    check("helper: prosit pct == Match_coverage_pct",
+          cov["prosit_by_union_coverage_pct"] == pct)
+    check("helper: ladder union (4/7) >= prosit union (3/7)",
+          cov["ladder_by_union_coverage_pct"] == 57.1 and pct == 42.9)
+    check("helper: one row per ladder ion",
+          len(rows) == cov["ladder_n_theoretical_ions"] == 14)
+    check("helper: prosit flags", sum(r["prosit_predicted"] for r in rows) == 4
+          and sum(r["prosit_matched"] for r in rows) == 3 and not fb)
+    check("helper: mismatch with the PROSIT pass raises", raises(
+        lambda: _coverage_for_best(
+            "PEPTIDEK", cand, obs, np.ones_like(obs), p_mz, p_ann, p_idxs,
+            20.0, {"protein_id": "P1", "Charge": 2},
+            expected=(n_clv + 1, pct, 3, 4))))
+
+    # New columns never collide with existing result keys or v2 columns
+    existing = {
+        "index", "status", "tryptic_peptide", "Charge", "Modified Peptide",
+        "Assigned Modifications", "PROSIT_Sequence", "Spectrum", "Batch",
+        "Hyperscore", "Global_Spectral_Count", "Is_OHW", "Round",
+        "protein_id", "SA_degrees", "SA_normalized", "SA_rating",
+        "Matched_fragments", "Total_predicted_fragments", "Unique_cleavages",
+        "Total_cleavage_sites", "Match_coverage", "Match_coverage_pct",
+        "Confidence", "Candidates_evaluated", "Selected_Spectrum",
+        "Selected_Batch"}
+    check("24 new columns, disjoint from existing",
+          len(COVERAGE_KEYS) == 24 and not set(COVERAGE_KEYS) & existing)
+
+    ok = all(results)
+    print(f"self-test: {sum(results)}/{len(results)} passed -> "
+          f"{'PASS' if ok else 'FAIL'}")
+    return ok
+
+
 def parse_spectrum_id(spectrum_id, batch, workspace):
     """
     Parse FragPipe Spectrum column: 'rushtmt_b1_21.59377.59377.3'
@@ -762,6 +1261,11 @@ def _process_one_peptide(args):
         "Selected_Batch": "",
         "status": "",
     }
+    # b/y coverage keys (new columns); fresh mutable containers per call
+    result.update(COVERAGE_DEFAULTS)
+    result["ion_rows"] = []
+    result["_cov_err"] = ""
+    result["_cand_fallback"] = False
 
     if pred_mz is None:
         result["SA_rating"] = "No prediction"
@@ -787,6 +1291,7 @@ def _process_one_peptide(args):
     best_candidate = None
     best_obs_data = None
     n_evaluated = 0
+    best_m_idxs = None  # matched PROSIT indices of the best candidate
 
     for cand in candidate_dicts:
         cand_spectrum = cand["Spectrum"]
@@ -820,6 +1325,7 @@ def _process_one_peptide(args):
             best_obs_data = (obs_mz, obs_int, n_match, n_pred,
                              sa_deg, sa_norm, scan_number,
                              n_clv, total_sites)
+            best_m_idxs = m_idxs
 
     result["Candidates_evaluated"] = n_evaluated
 
@@ -849,6 +1355,18 @@ def _process_one_peptide(args):
         "Selected_Batch": best_candidate["Batch"],
         "status": "ok",
     })
+
+    # b/y fragment-ion coverage of the selected PSM (adds new keys only)
+    try:
+        cov, ion_rows, used_fallback = _coverage_for_best(
+            peptide, best_candidate, obs_mz, obs_int, pred_mz, pred_ann,
+            best_m_idxs, ppm_tol, row_dict,
+            expected=(n_clv, round(match_pct, 1), n_match, n_pred))
+        result.update(cov)
+        result["ion_rows"] = ion_rows
+        result["_cand_fallback"] = used_fallback
+    except Exception as e:
+        result["_cov_err"] = f"{type(e).__name__}: {e}"[:200]
 
     # Mirror plot — only for the best representative
     acetyl_rescued = bool(row_dict.get("Acetyl_Rescued", False))
@@ -1131,7 +1649,7 @@ def _create_mirror_plot(peptide, charge, pred_mz, pred_int, pred_ann,
 # Phase 2 — Main SA computation with multiprocessing
 # =============================================================================
 def run_phase2(csv_path, msp_path, out_csv, plot_dir, n_workers,
-               no_plots=False, cand_csv=None):
+               no_plots=False, cand_csv=None, ions_out=None):
     print("\n" + "=" * 65)
     print(" Phase 2: Spectral Angle Computation (multiprocessing)")
     print("  Representative selection: best SA from up to "
@@ -1208,6 +1726,20 @@ def run_phase2(csv_path, msp_path, out_csv, plot_dir, n_workers,
     # Sort back by index
     results.sort(key=lambda r: r["index"])
 
+    # b/y coverage: per-ion rows, errors and diagnostics (kept out of df)
+    ion_rows = [row for r in results for row in r.pop("ion_rows", [])]
+    cov_errors = [(r["index"], df.loc[r["index"], "tryptic_peptide"],
+                   r.pop("_cov_err", "")) for r in results]
+    cov_errors = [e for e in cov_errors if e[2]]
+    n_cand_fallback = sum(1 for r in results if r.pop("_cand_fallback", False))
+    n_shortfall = 0  # candidates whose spectrum could not be read
+    for r in results:
+        if r["SA_rating"] == "No prediction":
+            continue
+        pep = df.loc[r["index"], "tryptic_peptide"]
+        if r["Candidates_evaluated"] < (len(cand_lookup.get(pep, [])) or 1):
+            n_shortfall += 1
+
     # Step 4: Augment CSV
     print("\n[4/5] Saving augmented CSV...")
     df["SA_degrees"] = [r["SA_degrees"] for r in results]
@@ -1225,9 +1757,39 @@ def run_phase2(csv_path, msp_path, out_csv, plot_dir, n_workers,
     df["Candidates_evaluated"] = [r["Candidates_evaluated"] for r in results]
     df["Selected_Spectrum"] = [r["Selected_Spectrum"] for r in results]
     df["Selected_Batch"] = [r["Selected_Batch"] for r in results]
+    # b/y coverage columns, appended after every existing column
+    overlap = set(COVERAGE_KEYS) & set(df.columns)
+    if overlap:
+        raise RuntimeError(f"coverage columns would overwrite existing "
+                           f"columns: {sorted(overlap)}")
+    for col in COVERAGE_KEYS:
+        vals = [r[col] for r in results]
+        metric = col.split("_", 1)[1]
+        if metric.endswith("_pct"):
+            df[col] = [np.nan if v is None else v for v in vals]
+        elif metric in COVERAGE_BOOL_METRICS:
+            df[col] = pd.array(vals, dtype="boolean")
+        else:
+            df[col] = pd.array(vals, dtype="Int64")
 
     df.to_csv(out_csv, index=False)
     print(f"  Saved -> {os.path.basename(out_csv)}")
+    if ions_out:
+        pd.DataFrame(ion_rows, columns=ION_COLUMNS).to_csv(
+            ions_out, index=False, compression={"method": "gzip", "mtime": 0})
+        print(f"  Saved -> {os.path.basename(ions_out)} ({len(ion_rows)} ions)")
+        err_out = _coverage_errors_path(ions_out)
+        with open(err_out, "w") as fh:
+            fh.write("index\ttryptic_peptide\terror\n")
+            for idx, pep, msg in cov_errors:
+                msg = msg.replace("\t", " ").replace("\n", " ")
+                fh.write(f"{idx}\t{pep}\t{msg}\n")
+        print(f"  Saved -> {os.path.basename(err_out)}")
+    print(f"  coverage_errors: {len(cov_errors)}")
+    for idx, pep, msg in cov_errors[:5]:
+        print(f"    {pep}: {msg}")
+    print(f"  cand_fallback: {n_cand_fallback}")
+    print(f"  EXTRACTION_SHORTFALL={n_shortfall}")
 
     # Representative selection stats
     n_improved = sum(1 for r in results
@@ -1328,7 +1890,59 @@ def main():
     parser.add_argument("--annotate-only", action="store_true",
                         help="Only append bracketed metrics to the master "
                              "CSV from existing all_peptides_with_SA CSV")
+    parser.add_argument("--output-root", type=str, default=None,
+                        help="Override output root directory. All output "
+                             "files (CSVs, MSP, mirror plots) will be written "
+                             "under this directory instead of prosit/.")
+    parser.add_argument("--input-csv", type=str, default=None,
+                        help="Override the tryptic peptide master CSV "
+                             "(default: INPUT_CSV under prosit/)")
+    parser.add_argument("--self-test", action="store_true",
+                        help="Run the b/y coverage unit checks and exit")
+    parser.add_argument("--p2-out-dir", type=str, default=None,
+                        help="Write Phase 2 outputs (SA CSV, annotated CSV, "
+                             "matched_ions, coverage_errors) here instead of "
+                             "next to the inputs. Requires --phase2.")
+    parser.add_argument("--p2-tag", type=str, default="",
+                        help="Suffix for the Phase 2 CSV names (e.g. _v2). "
+                             "Requires --phase2.")
     args = parser.parse_args()
+
+    if args.self_test:
+        if (args.test or args.phase1 or args.phase2 or args.annotate_only
+                or args.output_root or args.p2_out_dir or args.p2_tag):
+            parser.error("--self-test cannot be combined with other options")
+        sys.exit(0 if _self_test() else 1)
+    if (args.p2_out_dir or args.p2_tag) and (
+            not args.phase2 or args.phase1 or args.annotate_only):
+        parser.error("--p2-out-dir/--p2-tag require --phase2 "
+                     "(without --phase1 or --annotate-only)")
+
+    # Derive output paths under args.output_root if provided
+    global OUTPUT_CSV_P1, MSP_OUTPUT, OUTPUT_CSV_P2, OUTPUT_CSV_ANNOTATED
+    global PLOT_DIR, CANDIDATE_CSV, OUTPUT_SPECTRA_DIR
+    global OUTPUT_CSV_P1_TEST, MSP_OUTPUT_TEST, OUTPUT_CSV_P2_TEST
+    global OUTPUT_CSV_ANNOTATED_TEST, PLOT_DIR_TEST, CANDIDATE_CSV_TEST
+    global INPUT_CSV
+    if args.input_csv:
+        INPUT_CSV = os.path.abspath(args.input_csv)
+    if args.output_root:
+        out_root = os.path.abspath(args.output_root)
+        os.makedirs(out_root, exist_ok=True)
+        OUTPUT_CSV_P1            = os.path.join(out_root, "all_peptides_prosit.csv")
+        OUTPUT_SPECTRA_DIR       = os.path.join(out_root, "predicted_spectra")
+        MSP_OUTPUT               = os.path.join(OUTPUT_SPECTRA_DIR, "prosit_tmt_predicted_all.msp")
+        OUTPUT_CSV_P2            = os.path.join(out_root, "all_peptides_with_SA.csv")
+        OUTPUT_CSV_ANNOTATED     = os.path.join(out_root, "cleaned_tryptic_peptides_detailed_under_151aa_with_SA.csv")
+        PLOT_DIR                 = os.path.join(out_root, "mirror_plots")
+        CANDIDATE_CSV            = os.path.join(out_root, "candidate_psms.csv")
+        OUTPUT_CSV_P1_TEST       = os.path.join(out_root, "all_peptides_prosit_test.csv")
+        MSP_OUTPUT_TEST          = os.path.join(OUTPUT_SPECTRA_DIR, "prosit_tmt_predicted_all_test.msp")
+        OUTPUT_CSV_P2_TEST       = os.path.join(out_root, "all_peptides_with_SA_test.csv")
+        OUTPUT_CSV_ANNOTATED_TEST= os.path.join(out_root, "cleaned_tryptic_peptides_detailed_under_151aa_with_SA_test.csv")
+        PLOT_DIR_TEST            = os.path.join(out_root, "mirror_plots_test")
+        CANDIDATE_CSV_TEST       = os.path.join(out_root, "candidate_psms_test.csv")
+        print(f"[output-root] All outputs -> {out_root}")
 
     test_mode = args.test
     n_workers = args.workers or min(32, cpu_count())
@@ -1357,6 +1971,41 @@ def main():
         csv_ann = OUTPUT_CSV_ANNOTATED
         plot_d = PLOT_DIR
         cand_csv = CANDIDATE_CSV
+
+    # Phase 2 output redirect: retargets outputs only; inputs stay in place
+    ions_name = "matched_ions_test.csv.gz" if test_mode else "matched_ions.csv.gz"
+    ions_out = os.path.join(os.path.dirname(csv_p2), ions_name)
+    if args.p2_out_dir or args.p2_tag:
+        out_dir = (os.path.abspath(args.p2_out_dir) if args.p2_out_dir
+                   else os.path.dirname(os.path.abspath(csv_p2)))
+
+        def _retarget(path):
+            stem, ext = os.path.splitext(os.path.basename(path))
+            return os.path.join(out_dir, stem + args.p2_tag + ext)
+
+        protected = {os.path.abspath(p) for p in (
+            csv_p1, msp_out, cand_csv, csv_p2, csv_ann, INPUT_CSV,
+            OUTPUT_CSV_P2, OUTPUT_CSV_ANNOTATED,
+            OUTPUT_CSV_P2_TEST, OUTPUT_CSV_ANNOTATED_TEST)}
+        csv_p2, csv_ann, plot_d = (_retarget(csv_p2), _retarget(csv_ann),
+                                   _retarget(plot_d))
+        ions_out = os.path.join(out_dir, ions_name)
+        for target in (csv_p2, csv_ann, ions_out,
+                       _coverage_errors_path(ions_out)):
+            if os.path.abspath(target) in protected:
+                sys.exit(f"ERROR: output would replace an input/baseline: "
+                         f"{target}")
+            if os.path.exists(target):
+                sys.exit(f"ERROR: refusing to overwrite existing {target}")
+        if not os.path.isfile(cand_csv):
+            sys.exit(f"ERROR: candidate PSM file missing: {cand_csv}")
+        os.makedirs(out_dir, exist_ok=True)
+        print(f"[p2-redirect] inputs:  {csv_p1}")
+        print(f"                       {msp_out}")
+        print(f"                       {cand_csv}")
+        print(f"[p2-redirect] outputs: {csv_p2}")
+        print(f"                       {csv_ann}")
+        print(f"                       {ions_out}")
 
     # =========================================================================
     # Phase 1
@@ -1452,7 +2101,8 @@ def main():
         valid_mask = []
         for _, row in best_psm_df.iterrows():
             seq = parse_fragpipe_mods(row["Modified Peptide"],
-                                       row["Assigned Modifications"])
+                                       row["Assigned Modifications"],
+                                       batch=row.get("Batch"))
             if seq is None:
                 prosit_seqs.append(None)
                 valid_mask.append(False)
@@ -1533,7 +2183,7 @@ def main():
     # =========================================================================
     if run_p2:
         run_phase2(csv_p1, msp_out, csv_p2, plot_d, n_workers,
-                   no_plots=args.no_plots, cand_csv=cand_csv)
+                   no_plots=args.no_plots, cand_csv=cand_csv, ions_out=ions_out)
 
     # =========================================================================
     # Bracketed annotation output (from existing/all-new Phase 2 CSV)
@@ -1608,6 +2258,49 @@ def main():
         ann_master["Match_coverage"] = match_cov_col
         ann_master["Match_coverage_pct"] = match_cov_pct_col
         ann_master["Confidence"] = conf_col
+
+        # Theoretical-ladder b/y coverage, appended after the PROSIT metrics
+        # (absent from Phase 2 CSVs made before the coverage patch)
+        def _fmt_pct(v):
+            return round(float(v), 1)
+
+        def _fmt_run(v):
+            return int(v)
+
+        def _fmt_bool(v):
+            return str(v).strip().lower() in ("true", "1")
+
+        ladder_cols = [("ladder_b_coverage_pct", _fmt_pct),
+                       ("ladder_y_coverage_pct", _fmt_pct),
+                       ("ladder_by_union_coverage_pct", _fmt_pct),
+                       ("ladder_longest_by_run", _fmt_run),
+                       ("ladder_consec5", _fmt_bool)]
+        ladder_cols = [(c, f) for c, f in ladder_cols if c in sa_df.columns]
+        if ladder_cols:
+            ladder_lookup = {
+                r["tryptic_peptide"]: [r[c] for c, _ in ladder_cols]
+                for _, r in sa_df.iterrows()}
+            ladder_out = {c: [] for c, _ in ladder_cols}
+            for _, row in ann_master.iterrows():
+                try:
+                    peps = _ast.literal_eval(row["peptide_sequence"])
+                except (ValueError, SyntaxError):
+                    peps = []
+                if not isinstance(peps, list):
+                    peps = [peps]
+                vals = {c: [] for c, _ in ladder_cols}
+                for pep in peps:
+                    rec = ladder_lookup.get(str(pep).strip())
+                    for k, (c, fmt) in enumerate(ladder_cols):
+                        v = rec[k] if rec is not None else None
+                        vals[c].append(fmt(v) if pd.notna(v) else None)
+                for c in vals:
+                    ladder_out[c].append(str(vals[c]))
+            for c, _ in ladder_cols:
+                ann_master[c] = ladder_out[c]
+            print(f"  Appended ladder columns: "
+                  f"{', '.join(c for c, _ in ladder_cols)}")
+
         ann_master.to_csv(csv_ann, index=False)
 
         n_with_sa = sum(1 for v in sa_deg_col if "None" not in v)

@@ -50,6 +50,39 @@ cols = [
 
 summary_all = mp[cols].copy()
 
+# === 4. Add b/y fragment-ion coverage of each tryptic peptide ===
+# Bracketed per-peptide lists aligned with peptide_sequence (theoretical b/y
+# ladder of the PROSIT-selected PSM; prosit/prosit_pipeline.py --annotate-only),
+# plus per-microprotein rollups over its peptides.
+import ast
+
+ladder_cols = ['ladder_b_coverage_pct', 'ladder_y_coverage_pct',
+               'ladder_by_union_coverage_pct', 'ladder_longest_by_run',
+               'ladder_consec5']
+pep = pd.read_csv(os.path.join(os.path.dirname(__file__), '..', 'data',
+                               'cleaned_tryptic_peptides_detailed_under_151aa_with_SA.csv'),
+                  usecols=['sequence', 'peptide_sequence'] + ladder_cols)
+
+
+def _vals(cell):
+    if pd.isna(cell):
+        return []
+    return [v for v in ast.literal_eval(cell) if v is not None]
+
+
+pep['max_ladder_by_union_coverage_pct'] = pep['ladder_by_union_coverage_pct'].map(
+    lambda c: max(_vals(c), default=None))
+pep['max_ladder_longest_by_run'] = pep['ladder_longest_by_run'].map(
+    lambda c: max(_vals(c), default=None))
+pep['n_peptides_ladder_consec5'] = pep['ladder_consec5'].map(
+    lambda c: sum(_vals(c)) if _vals(c) else None)
+
+summary_all = summary_all.merge(pep, on='sequence', how='left', validate='one_to_one')
+for c in ['max_ladder_longest_by_run', 'n_peptides_ladder_consec5']:
+    summary_all[c] = summary_all[c].astype('Int64')
+print(f"Microproteins with b/y ladder coverage: "
+      f"{summary_all['max_ladder_by_union_coverage_pct'].notna().sum()}")
+
 # Swiss-Prot-MP filtering is handled centrally by the gold standard
 # (load_and_filter_master): require Ribo-seq, MS, or DIA evidence.
 
