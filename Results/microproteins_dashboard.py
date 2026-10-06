@@ -307,6 +307,73 @@ DECAY_CLASS_HELP = (
     'analysis).'
 )
 
+# Peptide specificity (Code/Peptide_specificity/): do an unreviewed entry's MS
+# peptides also occur -- identical, I=L, same mass, or as a non-tryptic
+# stretch -- in another human UniProt protein? One row per Salk/TrEMBL master
+# gene_id; Swiss-Prot microproteins are deliberately unflagged and carry 'NA'.
+PEPTIDE_FLAGS_CSV = (Path(__file__).resolve().parent.parent / "Code" / "data" /
+                     "unreviewed_microproteins_peptide_flags.csv")
+PEPSPEC_PARTIAL_SUFFIX = " (only some peptides; others unique)"
+# `interpretation` (partial suffix stripped) -> facet level. A verdict missing
+# here falls through to 'NA', so a new upstream verdict must be added.
+PEPSPEC_FROM_VERDICT = {
+    'Supported: peptides unique to this entry': 'Unique',
+    'Mostly supported: differs only by a deamidation-like mass match': 'Deamidation-only match',
+    'Ambiguous: same-mass peptide in another protein; fragment ions may separate them':
+        'Same-mass peptide elsewhere',
+    'Ambiguous: peptide shared with another protein': 'Shared tryptic peptide',
+    'Ambiguous: could be a fragment of the full-length protein from the same gene':
+        'Possible fragment · same gene',
+    'Ambiguous: could be a fragment of a different protein': 'Possible fragment · other protein',
+    'No MS evidence': 'No MS peptides',
+}
+PEPSPEC_LEVELS = list(PEPSPEC_FROM_VERDICT.values()) + ['NA']
+PEPSPEC_LEVEL_HELP = {
+    'Unique': "No other human UniProt protein contains these peptides (I = L and "
+              "same-mass rearrangements included).",
+    'Deamidation-only match': "The peptide matches another protein only via N→D / Q→E, a "
+                              "deamidation-like mass shift. Mostly supported.",
+    'Same-mass peptide elsewhere': "Another protein has a same-mass rearrangement of the "
+                                   "peptide (e.g. QLLFPIVR vs QLLPFLVR); b/y fragment ions "
+                                   "may separate them.",
+    'Shared tryptic peptide': "The identical peptide (I = L) is a normal tryptic peptide of "
+                              "another protein.",
+    'Possible fragment · same gene': "The peptide sits inside the full-length protein of the "
+                                     "entry's own gene at a non-trypsin site: a downstream "
+                                     "proteoform or a proteolytic fragment.",
+    'Possible fragment · other protein': "The peptide sits inside an unrelated protein at a "
+                                         "non-trypsin site: possibly a non-specific cleavage "
+                                         "product of it.",
+    'No MS peptides': "Unreviewed entry with no peptides in the master peptide list, so "
+                      "nothing to check (mostly Ribo-seq-only entries).",
+    'NA': "Not assessed: Swiss-Prot microproteins are not flagged.",
+}
+PEPSPEC_HELP = (
+    "Whether this unreviewed entry's MS peptides also occur in another human UniProt "
+    "protein (UP000005640 incl. TrEMBL and isoforms). Anything other than Unique is "
+    "ambiguous by peptide specificity alone, NOT disproved. '(partial)' = only some "
+    "peptides match; the rest are unique. NA = Swiss-Prot, not assessed."
+)
+# Flag-table column -> dashboard column. Prefixed so nothing collides with the
+# master, and carried through the merge for the entry page's twin table.
+# NB: extract_unified_fields discovers columns by NAME PATTERN (e.g. anything
+# ending '_gene' is bfilled into Parent_Gene; 'smorf'+'class' into smORF_Class),
+# so no name here may end in '_gene' -- hence '_Same_Gene_Flag'.
+PEPSPEC_COLS = {
+    'interpretation': 'PepSpec_Verdict',
+    'entry_peptides': 'PepSpec_Entry_Peptides',
+    'matched_entry_peptide': 'PepSpec_Matched_Peptide',
+    'twin_peptide': 'PepSpec_Twin_Peptide',
+    'differences': 'PepSpec_Differences',
+    'twin_peptide_protein': 'PepSpec_Twin_Protein',
+    'twin_peptide_trypsin': 'PepSpec_Twin_Trypsin',
+    'peptides_with_this_match': 'PepSpec_Peptides_Matching',
+    'matching_protein': 'PepSpec_Matching_Protein',
+    'matching_protein_is_same_gene': 'PepSpec_Same_Gene_Flag',
+    'n_fragment_ions_that_distinguish': 'PepSpec_Distinguishing_Ions',
+    'n_independent_peptide_sites': 'PepSpec_Sites',
+}
+
 
 # =============================================================================
 # MAIN-TABLE COLUMN DESCRIPTIONS
@@ -336,6 +403,7 @@ COLUMN_DESCRIPTIONS = {
     'ShortStop Score': 'ShortStop ML confidence score (0–1).',
     'Annotation Method': 'How the microprotein was annotated: MS (mass-spec detected) or RiboCode-ShortStop (translation evidence without MS detection).',
     'Spectra Quality': 'Best PROSIT spectral-match confidence tier (from the master Confidence column).',
+    'Peptide Specificity': "Whether this unreviewed entry's MS peptides also occur in another human UniProt protein: Unique; Deamidation-only match; Same-mass peptide elsewhere (b/y ions may separate them); Shared tryptic peptide; Possible fragment (same gene / other protein — the peptide sits inside that protein at a non-trypsin site). Non-unique means ambiguous by peptide specificity alone, not disproved. '(partial)' = only some peptides match. NA = Swiss-Prot, not assessed.",
     'Nt-Acetylated': 'At least one tryptic peptide carries an N-terminal acetyl mark — direct evidence that this is a genuine protein N-terminus.',
     'Nt-Acetyl Peptides': 'Tryptic peptide sequence(s) observed with an N-terminal acetyl mark.',
     'Nt-Acetyl PSMs': 'Total Nt-acetylated PSMs summed across the Nt-acetylated peptides.',
@@ -392,6 +460,14 @@ COLUMN_DESCRIPTIONS = {
     'P-site % Frame 1': 'Percent of the ORF\'s P-sites at codon position 2.',
     'P-site % Frame 2': 'Percent of the ORF\'s P-sites at codon position 3.',
     'P-site Frame 0 RPKM': 'Frame-0 P-sites per kb of CDS per million P-sites (41 adult Ribo-seq libraries).',
+    **{f'{_sl} P-sites {_w} nt': (f"Ribo-seq P-sites within {_w} nt {'upstream (5′)' if _s == 'up' else 'downstream (3′)'} "
+                                   "of the CDS along the host transcript (fewer nt if the transcript ends first). "
+                                   "Salk/TrEMBL only.")
+       for _s, _sl in (('up', 'Upstream'), ('down', 'Downstream')) for _w in (50, 100, 250, 1000)},
+    **{f'{_sl} 250 nt % Frame 0': (f"% of P-sites in the {_sl.lower()} 250 nt that are in frame with the smORF. "
+                                    "Excludes positions inside annotated GENCODE CDS and the 6 nt just upstream of "
+                                    "the start codon; ~33% = no frame bias.")
+       for _sl in ('Upstream', 'Downstream')},
     'BLAST UniProt Match': 'UniProt accession of the best BLASTp hit.',
     'BLAST % Match': 'BLASTp percent identity to the best UniProt hit.',
     'BLAST Aln Length': 'BLASTp alignment length (residues).',
@@ -1450,6 +1526,39 @@ PSITE_FRAME_CSV = Path(__file__).resolve().parent / "RP3" / "Psite_frame_by_sequ
 PSITE_FRAME_COLS = ["Psites_pct_frame0", "Psites_pct_frame1", "Psites_pct_frame2",
                     "Psites_frame0_RPKM"]
 
+# Flanking Ribo-seq (Code/RP3_analysis/smorf_flank_psites.py): adult-brain
+# P-sites in 50/100/250/1000-nt windows up/downstream of each Salk/TrEMBL smORF,
+# walked along its spliced host transcript; keyed on master gene_id. The
+# structure table (host exons, CDS, annotated-CDS spans) drives the entry
+# page's live P-site plot, read from the browser-track bigWigs.
+FLANK_CSV = Path(__file__).resolve().parent.parent / "Code" / "data" / "smorf_flank_psites.csv"
+FLANK_STRUCT_CSV = (Path(__file__).resolve().parent.parent / "Code" / "data" /
+                    "smorf_flank_structure.csv")
+FLANK_BW_DIR = Path(__file__).resolve().parent.parent / "Code" / "data" / "browser_tracks"
+FLANK_PSITE_TOTAL = 116_287_730  # P-sites behind the CPM bigWigs (RP3_analysis/README.md)
+FLANK_WINDOWS = (50, 100, 250, 1000)
+FLANK_SIDES = ('up', 'down')
+FLANK_SIDE_LABEL = {'up': 'Upstream', 'down': 'Downstream'}
+FLANK_STATS = ('psites', 'len', 'density_over_cds', 'annCDS_bp', 'clean_n',
+               'pct_f0', 'pct_f1', 'pct_f2')
+FLANK_COLS = ['cds_len', 'cds_psites'] + [f'{s}{w}_{k}' for s in FLANK_SIDES
+                                          for w in FLANK_WINDOWS for k in FLANK_STATS]
+# Raw flank columns travel through the unified frame as 'Flank_<col>'.
+FLANK_TABLE_COLS = {
+    **{f'Flank_{s}{w}_psites': f'{FLANK_SIDE_LABEL[s]} P-sites {w} nt'
+       for s in FLANK_SIDES for w in FLANK_WINDOWS},
+    **{f'Flank_{s}250_pct_f0': f'{FLANK_SIDE_LABEL[s]} 250 nt % Frame 0' for s in FLANK_SIDES},
+}
+# Frame 0/1/2 relative to the smORF start (reference categorical slots 1-3, dark).
+FLANK_FRAME_COLORS = ('#3987e5', '#d95926', '#199e70')
+FLANK_HELP = (
+    "Ribo-seq P-sites (41 adult DLPFC libraries) next to the smORF, along its host "
+    "transcript. Tick a window to keep smORFs with at least one P-site within that many "
+    "nt upstream (5') or downstream (3') of the CDS. Windows are nested, so ticking "
+    "several on one side is the same as ticking the largest; Upstream and Downstream "
+    "combine with AND. Salk and TrEMBL entries only; Swiss-Prot is not assessed."
+)
+
 
 def _resolve_master_source(csv_path=MASTER_CSV):
     """Return a path pandas can read for the master table.
@@ -1565,6 +1674,63 @@ def load_decay_classes(_tsv_path=str(DECAY_CLASS_TSV)):
             if r.category in DECAY_CLASS_FROM_CATEGORY}
 
 
+@st.cache_data(show_spinner=False)
+def load_peptide_flags(_csv_path=str(PEPTIDE_FLAGS_CSV)):
+    """Peptide-specificity flags keyed on master gene_id (one row per Salk/TrEMBL entry).
+
+    Returns gene_id, the flag table's own `sequence` (as `_pepspec_seq`, for a
+    join check), `Peptide_Specificity` (facet level), `PepSpec_Partial` (only
+    some peptides match) and the PEPSPEC_COLS columns -- or None if the file
+    is unavailable, so the facet degrades to all-'NA'.
+    """
+    p = Path(_csv_path)
+    if not p.exists():
+        return None
+    try:
+        f = pd.read_csv(p, usecols=['gene_id', 'sequence', *PEPSPEC_COLS])
+    except Exception:
+        return None
+    verdict = f['interpretation'].astype(str)
+    f['PepSpec_Partial'] = verdict.str.endswith(PEPSPEC_PARTIAL_SUFFIX)
+    f['Peptide_Specificity'] = (
+        verdict.str.slice(stop=-len(PEPSPEC_PARTIAL_SUFFIX)).where(f['PepSpec_Partial'], verdict)
+        .map(PEPSPEC_FROM_VERDICT).fillna('NA'))
+    return f.rename(columns={'sequence': '_pepspec_seq', **PEPSPEC_COLS})
+
+
+@st.cache_data(show_spinner=False)
+def load_flank_psites(_csv_path=str(FLANK_CSV)):
+    """Flanking Ribo-seq table keyed on master gene_id, columns prefixed 'Flank_'.
+
+    Also carries gene_id as `Flank_gene_id` so the entry page can look up the
+    smORF's structure after the sequence-keyed merges drop gene_id. None if the
+    file is unavailable, so the columns, facet and entry section disappear.
+    """
+    p = Path(_csv_path)
+    if not p.exists():
+        return None
+    try:
+        f = pd.read_csv(p, usecols=['gene_id', *FLANK_COLS])
+    except Exception:
+        return None
+    f = f.rename(columns={c: f'Flank_{c}' for c in FLANK_COLS})
+    f['Flank_gene_id'] = f['gene_id']
+    return f
+
+
+@st.cache_data(show_spinner=False)
+def load_flank_structures(_csv_path=str(FLANK_STRUCT_CSV)):
+    """gene_id -> {chrom, strand, stop_moved_into_cds, exons, cds, annotated_cds}."""
+    p = Path(_csv_path)
+    if not p.exists():
+        return {}
+    try:
+        s = pd.read_csv(p, keep_default_na=False)
+    except Exception:
+        return {}
+    return s.set_index('gene_id').to_dict('index')
+
+
 # Best-tier ranking used to collapse the bracketed PROSIT `Confidence` list.
 _CONFIDENCE_RANK = {'Strong': 0, 'Moderate': 1, 'Weak': 2, 'Insufficient': 3}
 
@@ -1678,6 +1844,35 @@ def load_and_filter_master(_csv_path=str(MASTER_CSV)):
         mp["NMD_Decay_Class"] = mp["gene_id"].map(_decay_map).fillna("NA")
     else:
         mp["NMD_Decay_Class"] = "NA"
+
+    # Step 8: peptide-specificity flags, also keyed on gene_id (same reason).
+    # The flag table carries its own copy of the sequence; any row where it
+    # disagrees with the master is a stale flag and is left unflagged rather
+    # than shown against the wrong protein.
+    _flags = load_peptide_flags()
+    if _flags is not None and "gene_id" in mp.columns:
+        mp = mp.merge(_flags, on="gene_id", how="left", validate="one_to_one")
+        _stale = mp["_pepspec_seq"].notna() & (mp["_pepspec_seq"] != mp["sequence"].astype(str))
+        mp.loc[_stale, ["Peptide_Specificity", "PepSpec_Partial", *PEPSPEC_COLS.values()]] = pd.NA
+        mp = mp.drop(columns="_pepspec_seq")
+    else:
+        mp["Peptide_Specificity"] = "NA"
+    mp["Peptide_Specificity"] = mp["Peptide_Specificity"].fillna("NA")
+    mp["PepSpec_Partial"] = mp.get("PepSpec_Partial", False)
+    mp["PepSpec_Partial"] = mp["PepSpec_Partial"].eq(True)
+
+    # Step 9: flanking Ribo-seq P-sites, also keyed on gene_id (same reason).
+    # The flank table's CDS (stop codon included where the transcript has one)
+    # must be 3 x protein length or that +3; anything else means it was built
+    # from a different structure, and the row is left blank.
+    _flank = load_flank_psites()
+    if _flank is not None and "gene_id" in mp.columns:
+        mp = mp.merge(_flank, on="gene_id", how="left", validate="one_to_one")
+        _aa = mp["sequence"].astype(str).str.rstrip("*").str.len()
+        _codons = mp["Flank_cds_len"] / 3
+        _bad = mp["Flank_cds_len"].notna() & ~(_codons.eq(_aa) | _codons.eq(_aa + 1))
+        _fcols = [c for c in mp.columns if c.startswith("Flank_")]
+        mp.loc[_bad, _fcols] = np.nan
     return mp
 
 
@@ -1900,7 +2095,10 @@ def load_and_merge_all_data():
     # of Tryptic_Peptides — they are not positionally aligned with it.
     mp = load_and_filter_master()
     _base_cols = [c for c in ['sequence', 'peptide_sequence', 'start', 'end',
-                             'Confidence', 'NMD_Decay_Class'] if c in mp.columns]
+                             'Confidence', 'NMD_Decay_Class', 'Peptide_Specificity',
+                             'PepSpec_Partial', *PEPSPEC_COLS.values(),
+                             'Flank_gene_id', *(f'Flank_{c}' for c in FLANK_COLS)]
+                  if c in mp.columns]
     _acetyl_cols = [c for c in ('Nt_acetyl_tryptic_peptide', 'Nt_acetyl_N_PSMs',
                                 'Nt_acetyl_PSM_fraction') if c in mp.columns]
     master_df = mp[_base_cols + _acetyl_cols].rename(
@@ -2134,6 +2332,13 @@ def extract_unified_fields(master_df):
         ud['NMD_Decay_Class'] = ud['NMD_Decay_Class'].fillna('NA')
     else:
         ud['NMD_Decay_Class'] = 'NA'
+
+    # Peptide specificity: likewise joined on gene_id in load_and_filter_master;
+    # only normalize rows the outer merge introduced.
+    ud['Peptide_Specificity'] = (ud['Peptide_Specificity'].fillna('NA')
+                                 if 'Peptide_Specificity' in ud.columns else 'NA')
+    ud['PepSpec_Partial'] = (ud['PepSpec_Partial'].eq(True)
+                             if 'PepSpec_Partial' in ud.columns else False)
 
     # ShortStop Label
     cols = [c for c in master_df.columns if 'shortstop' in c.lower() and 'label' in c.lower()]
@@ -2480,6 +2685,12 @@ def _source_csv_paths():
         DECAY_CLASS_TSV,
         # Per-peptide b/y fragment-ion coverage (Fragment-Ion Coverage facet).
         LADDER_CSV,
+        # Peptide-specificity flags (Peptide Specificity facet + entry table).
+        PEPTIDE_FLAGS_CSV,
+        # Per-sequence P-site frame stats (read in _derive_rp3).
+        PSITE_FRAME_CSV,
+        # Flanking Ribo-seq P-sites (Flanking Ribo-seq facet + entry section).
+        FLANK_CSV,
     ]
 
 
@@ -3030,7 +3241,9 @@ def main():
         _dom_kozak = ['strong', 'adequate', 'weak']
         _dom_quality = list(QUALITY_LEVELS)
         _dom_decay = list(DECAY_CLASS_LEVELS)
-        _dom_ribo = ['RiboCode-SAM', 'Coverage']
+        # 'No MS peptides' and 'NA' stay in the data and the column, but get no box.
+        _dom_pepspec = [l for l in PEPSPEC_LEVELS if l not in ('No MS peptides', 'NA')]
+        _dom_ribo = ['RiboCode-SAM', 'Coverage', 'Flanking']
         _dom_shortstop = (sorted(unified_df['ShortStop_Label'].dropna().unique())
                           if 'ShortStop_Label' in unified_df.columns else [])
         _dom_tmt_sig = ['Tier 1', 'Tier 2', 'Tier 3', 'Tier 4']
@@ -3047,10 +3260,12 @@ def main():
         selected_quality = _sel('f_quality', _dom_quality)
         selected_min_peptides = _sel('f_min_peptides', MIN_PEPTIDE_TIERS)
         selected_frag = _sel('f_frag', list(FRAG_COV_LEVELS))
+        selected_pepspec = _sel('f_pepspec', _dom_pepspec)
         selected_decay = _sel('f_decay', _dom_decay)
         selected_shortstop = _sel('f_shortstop', _dom_shortstop)
         selected_tmt_sig = _sel('f_tmt_sig', _dom_tmt_sig)
         selected_rna_sig = _sel('f_rna_sig', _dom_rna_sig)
+        selected_flank = {_s: _sel(f'f_flank_{_s}', FLANK_WINDOWS) for _s in FLANK_SIDES}
 
         # Slider bounds come from the full dataset so they never move underfoot.
         def _bounds(col, cast):
@@ -3106,8 +3321,14 @@ def main():
                                | base_df['Kozak_Strength'].isna())
 
         # Ribosome coverage: RiboCode-SAM = RiboCode ORF call with a ShortStop
-        # SAM label; Coverage = P-sites in at least one frame (% frame 0, 1 or 2 > 0).
+        # SAM label; Coverage = P-sites in at least one frame (% frame 0, 1 or 2 > 0);
+        # Flanking = >=1 P-site within 1 kb upstream or downstream (Flank_* columns).
         def _ribo_mask(df, lvl):
+            if lvl == 'Flanking':
+                _fl = ['Flank_up1000_psites', 'Flank_down1000_psites']
+                if not all(c in df.columns for c in _fl):
+                    return None
+                return (df[_fl].apply(pd.to_numeric, errors='coerce') >= 1).any(axis=1)
             if lvl == 'RiboCode-SAM':
                 if 'RiboCode' not in df.columns or 'ShortStop_Label' not in df.columns:
                     return None
@@ -3139,10 +3360,18 @@ def main():
                 continue
             _frag_any = _m if _frag_any is None else (_frag_any | _m)
         _add_mask('frag', _frag_any)
+        if selected_pepspec and _col('Peptide_Specificity') is not None:
+            _add_mask('pepspec', base_df['Peptide_Specificity'].isin(selected_pepspec))
         if selected_decay and _col('NMD_Decay_Class') is not None:
             _add_mask('decay', base_df['NMD_Decay_Class'].isin(selected_decay))
         if selected_shortstop and _col('ShortStop_Label') is not None:
             _add_mask('shortstop', base_df['ShortStop_Label'].isin(selected_shortstop))
+        # Flanking Ribo-seq: windows nest, so OR within a side = the largest
+        # ticked window; each side is its own mask, so Upstream AND Downstream.
+        for _s, _ws in selected_flank.items():
+            _fc = f'Flank_{_s}{max(_ws)}_psites' if _ws else None
+            if _fc and _col(_fc) is not None:
+                _add_mask(f'flank_{_s}', pd.to_numeric(base_df[_fc], errors='coerce') >= 1)
 
         # Significance facets. Tier 1 = strongest (q<0.05, ≥50% samples) … Tier 4
         # = weakest (q<0.2, ≥1 sample). Checked boxes are OR'd, matching every
@@ -3261,12 +3490,25 @@ def main():
             _ribo_help = {
                 'RiboCode-SAM': "RiboCode ORF call with a ShortStop SAM (Secreted/Intracellular) label.",
                 'Coverage': "P-sites in at least one frame (P-site % Frame 0, 1 or 2 > 0).",
+                'Flanking': "At least one Ribo-seq P-site within 1 kb upstream or downstream of "
+                            "the CDS along the host transcript (Salk/TrEMBL only).",
             }
             for _lvl in _dom_ribo:
                 _m = _ribo_mask(_rv, _lvl)
                 _count_checkbox(f"f_ribo_{_lvl}", _lvl,
                                 int(_m.sum()) if _m is not None else 0,
                                 help=_ribo_help[_lvl])
+            if 'Flank_up50_psites' in base_df.columns:
+                st.markdown("**Flanking Ribo-seq**", help=FLANK_HELP)
+                for _s in FLANK_SIDES:
+                    _fv = _narrow(skip=f'flank_{_s}')
+                    st.caption(f"{FLANK_SIDE_LABEL[_s]}: ≥1 P-site within")
+                    _fcols = st.columns(2)
+                    for _i, _w in enumerate(FLANK_WINDOWS):
+                        _n = int((pd.to_numeric(_fv[f'Flank_{_s}{_w}_psites'],
+                                                errors='coerce') >= 1).sum())
+                        with _fcols[_i % 2]:
+                            _count_checkbox(f"f_flank_{_s}_{_w}", f"{_w} nt", _n)
             st.markdown("**Peptide Evidence**")
             _pc = _peptide_count_series(_narrow(skip='peptides'))
             for _i, _n in enumerate(MIN_PEPTIDE_TIERS):
@@ -3284,6 +3526,12 @@ def main():
                 _count_checkbox(f"f_frag_{_tok}", _lbl,
                                 int(_m.sum()) if _m is not None else 0,
                                 help=_hlp)
+            if 'Peptide_Specificity' in base_df.columns:
+                st.markdown("**Peptide Specificity**", help=PEPSPEC_HELP)
+                _psc = _narrow(skip='pepspec')['Peptide_Specificity'].value_counts()
+                for _lvl in _dom_pepspec:
+                    _count_checkbox(f"f_pepspec_{_lvl}", _lvl, int(_psc.get(_lvl, 0)),
+                                    help=PEPSPEC_LEVEL_HELP[_lvl])
 
         # ── Differential Expression ──
         # Checkbox facets like the rest of the sidebar: the checkbox *key* carries
@@ -3546,8 +3794,14 @@ def main():
     if selected_frag:
         _active_chips.append(("Fragment ions", ", ".join(
             FRAG_COV_LEVELS[t][0] for t in selected_frag)))
+    if selected_pepspec:
+        _active_chips.append(("Peptide specificity", ", ".join(map(str, selected_pepspec))))
     if selected_ribo:
         _active_chips.append(("Ribosome coverage", ", ".join(map(str, selected_ribo))))
+    for _s, _ws in selected_flank.items():
+        if _ws:
+            _active_chips.append((f"{FLANK_SIDE_LABEL[_s]} Ribo-seq",
+                                  f"≥1 P-site within {max(_ws)} nt"))
     if selected_tmt_sig:
         _active_chips.append(("TMT-MS", ", ".join(map(str, selected_tmt_sig))))
     if selected_rna_sig:
@@ -3691,6 +3945,7 @@ def main():
         'Psites_pct_frame1': 'P-site % Frame 1',
         'Psites_pct_frame2': 'P-site % Frame 2',
         'Psites_frame0_RPKM': 'P-site Frame 0 RPKM',
+        **FLANK_TABLE_COLS,
         'Tryptic_Peptides': 'Tryptic Peptides',
         '_Ladder_Display': 'b/y Coverage % per Peptide',
         'Ladder_Best_Union_Pct': 'Best b/y Coverage %',
@@ -3759,6 +4014,14 @@ def main():
             lambda v: DECAY_CLASS_EMOJI.get(v, DECAY_CLASS_EMOJI['NA'])
         )
         display_cols.append('ORF Rules')
+
+    # Peptide specificity; raw Peptide_Specificity stays untouched for the facet.
+    if 'Peptide_Specificity' in filtered_df.columns:
+        _partial = (filtered_df['PepSpec_Partial'].eq(True)
+                    if 'PepSpec_Partial' in filtered_df.columns else False)
+        filtered_df['Peptide Specificity'] = filtered_df['Peptide_Specificity'].where(
+            ~_partial, filtered_df['Peptide_Specificity'] + ' (partial)')
+        display_cols.append('Peptide Specificity')
 
     display_df = filtered_df[display_cols].copy()
 
@@ -3881,7 +4144,7 @@ def _render_results_table(filtered_df, display_df):
             'TMT CI low (0%)', 'TMT CI high (0%)', "TMT Cohen's d (0%)",
             'TMT p-val (0%)', 'TMT q-val (0%)',
             'MS Detect Control', 'MS Detect AD', 'TMT Tier', 'Spectra Quality',
-            'Best b/y Coverage %', 'Longest b/y Run', 'Peptides ≥5 Consec b/y',
+            'Peptide Specificity', 'Best b/y Coverage %', 'Longest b/y Run', 'Peptides ≥5 Consec b/y',
             'Tryptic Peptides', 'b/y Coverage % per Peptide', 'Tryptic Protein ID',
             'Tryptic Start Positions', 'Tryptic End Positions',
             'Nt-Acetylated', 'Nt-Acetyl Peptides', 'Nt-Acetyl PSMs',
@@ -3898,6 +4161,7 @@ def _render_results_table(filtered_df, display_df):
             'RiboCode', 'P-site Frame 0 RPKM',
             'P-site % Frame 0', 'P-site % Frame 1', 'P-site % Frame 2',
             'RP3 Default', 'RP3 MM+Amb', 'RP3 Amb', 'RP3 MM',
+            *FLANK_TABLE_COLS.values(),
         ],
         'Homology (BLAST)': [
             'BLAST UniProt Match', 'BLAST % Match', 'BLAST Aln Length',
@@ -4002,6 +4266,8 @@ def _render_results_table(filtered_df, display_df):
             'smORF Subtype': st.column_config.TextColumn('smORF Subtype', max_chars=15),
             'ORF Rules': st.column_config.TextColumn(
                 'ORF Rules', max_chars=27, help=DECAY_CLASS_HELP),
+            'Peptide Specificity': st.column_config.TextColumn(
+                'Peptide Specificity', max_chars=34, help=PEPSPEC_HELP),
             'ShortStop Score': st.column_config.TextColumn('ShortStop Score', help='ShortStop ML confidence score (0-1)', max_chars=10),
             'PhyloCSF Score': st.column_config.NumberColumn('PhyloCSF Score', help='PhyloCSF evolutionary conservation score', format='%.2f'),
             'Unique Spectral Counts (DDA)': st.column_config.NumberColumn('Unique Spectral Counts (DDA)', help='Number of unique mass spectrometry spectral counts', format='%d'),
@@ -4045,6 +4311,9 @@ def _render_results_table(filtered_df, display_df):
             'P-site % Frame 1': st.column_config.NumberColumn('P-site % Frame 1', help='Percent of ORF P-sites in frame 1', format='%.1f'),
             'P-site % Frame 2': st.column_config.NumberColumn('P-site % Frame 2', help='Percent of ORF P-sites in frame 2', format='%.1f'),
             'P-site Frame 0 RPKM': st.column_config.NumberColumn('P-site Frame 0 RPKM', help='Frame-0 P-sites per kb of CDS per million P-sites', format='%.3f'),
+            **{_d: st.column_config.NumberColumn(_d, help=COLUMN_DESCRIPTIONS.get(_d),
+                                                 format='%.1f' if '%' in _d else '%d')
+               for _d in FLANK_TABLE_COLS.values()},
             'Tryptic Peptides': st.column_config.TextColumn('Tryptic Peptides', help='Tryptic peptide sequences', max_chars=60),
             'Tryptic Protein ID': st.column_config.TextColumn('Protein ID', help='Protein ID associated with the tryptic peptides', max_chars=15),
             'Tryptic Start Positions': st.column_config.TextColumn('Start Positions', help='Start positions of tryptic peptides', max_chars=30),
@@ -4797,8 +5066,15 @@ def _has_mirror(row, ctx):
     return bool(get_matching_mirror_plots(row.get('Tryptic_Peptides'), ctx['mirror_index']))
 
 
+def _has_pepspec(row):
+    """Unreviewed entry with MS peptides that went through the specificity check."""
+    return row.get('Peptide_Specificity') not in (None, 'NA', 'No MS peptides') and \
+        _not_na(row.get('Peptide_Specificity'))
+
+
 def _has_proteomics(row, ctx):
-    return _has_tmt(row) or _has_nt_acetyl(row) or _has_nterm_substitution(row) or _has_mirror(row, ctx)
+    return (_has_tmt(row) or _has_pepspec(row) or _has_nt_acetyl(row)
+            or _has_nterm_substitution(row) or _has_mirror(row, ctx))
 
 
 def _has_rna_stats(row):
@@ -4820,7 +5096,7 @@ def _has_transcriptomics(row, ctx):
 def _has_riboseq(row, ctx):
     return any(_not_na(row.get(c)) for c in
                ('RP3_Default', 'RP3_MM_Amb', 'RP3_Amb', 'RP3_MM', 'RiboCode',
-                *PSITE_FRAME_COLS))
+                *PSITE_FRAME_COLS, 'Flank_cds_psites'))
 
 
 def _has_singlecell(row, ctx):
@@ -5018,6 +5294,48 @@ def _sec_proteomics(row, ctx):
             ('q-value (BH)', _fmt(tmt_qv, '%.4f'), _sig_class_pval(tmt_qv, 0.2)),
         ], ncols=3)
 
+    # ── Peptide specificity vs. human UniProt (unreviewed entries with peptides) ──
+    if _has_pepspec(row):
+        _lvl = row.get('Peptide_Specificity')
+        _partial = bool(row.get('PepSpec_Partial')) if _not_na(row.get('PepSpec_Partial')) else False
+
+        def _pipe(col):
+            v = row.get(col)
+            return [x.strip() for x in str(v).split(' | ')] if _not_na(v) and str(v).strip() else []
+
+        _n_all = len(_pipe('PepSpec_Entry_Peptides'))
+        _fields = [
+            ('Verdict', html.escape(_lvl + (' (partial)' if _partial else ''))),
+            ('Peptides Matching Elsewhere', f"{len(_pipe('PepSpec_Matched_Peptide'))} of {_n_all}"),
+            ('Independent Peptide Sites', _fmt(row.get('PepSpec_Sites'), '%d')),
+        ]
+        if _not_na(row.get('PepSpec_Matching_Protein')):
+            _fields.append(('Matching Protein(s)', html.escape(
+                str(row.get('PepSpec_Matching_Protein')).replace(';', ', '))))
+        if _not_na(row.get('PepSpec_Distinguishing_Ions')):
+            _fields.append(('Distinguishing b/y Ions',
+                            _fmt(row.get('PepSpec_Distinguishing_Ions'), '%d')))
+        _kv_section('Peptide Specificity (vs. human UniProt)', _fields,
+                    ncols=min(len(_fields), 4))
+        _cols = {'Entry Peptide': 'PepSpec_Matched_Peptide', 'Twin Peptide': 'PepSpec_Twin_Peptide',
+                 'Differences': 'PepSpec_Differences', 'Twin Protein': 'PepSpec_Twin_Protein',
+                 'Trypsin Releases Twin?': 'PepSpec_Twin_Trypsin'}
+        _split = {k: _pipe(c) for k, c in _cols.items()}
+        _n = max((len(v) for v in _split.values()), default=0)
+        if _n:
+            st.dataframe(pd.DataFrame({k: v + [''] * (_n - len(v)) for k, v in _split.items()}),
+                         width='stretch', hide_index=True)
+        if _not_na(row.get('PepSpec_Verdict')):
+            st.caption(f"**{row.get('PepSpec_Verdict')}.**")
+        st.caption(
+            "Peptides are written previous.PEPTIDE.next (^ = protein start, $ = end). Differences "
+            "read entry→twin: 'none' = letter-identical, I3L = I at position 3 is L in the twin "
+            "(same mass). The atlas search was fully tryptic, so a twin that trypsin would not "
+            "release was never considered for that protein — the entry's own start/stop supplied "
+            "the tryptic end. 'Ambiguous' means unsupported by peptide specificity alone, not "
+            "disproved."
+        )
+
     # ── N-terminal acetylation (only if any acetylated peptide was observed) ──
     if _has_nt_acetyl(row):
         def _semis(val):
@@ -5159,6 +5477,234 @@ def _sec_riboseq(row, ctx):
             ('% Frame 1', _fmt(row.get('Psites_pct_frame1'), '%.1f')),
             ('% Frame 2', _fmt(row.get('Psites_pct_frame2'), '%.1f')),
         ], ncols=4)
+    if _not_na(row.get('Flank_cds_psites')):
+        _render_flank_section(row)
+
+
+def _parse_blocks(text):
+    return [tuple(int(x) for x in b.split('-')) for b in str(text).split(';') if b]
+
+
+def _flank_tx_segs(exons, cds, strand, maxw):
+    """Genomic segments of up to maxw nt of spliced transcript 5'/3' of the CDS.
+
+    Inlined copy of tx_flank_segs in Code/RP3_analysis/smorf_flank_psites.py --
+    keep the two in step (the flank CSV's window sums are the check).
+    """
+    exons = sorted(exons)
+    cs, ce = min(s for s, _ in cds), max(e for _, e in cds)
+    left, right, need = [], [], maxw
+    for s, e in reversed(exons):
+        if s >= cs or need == 0:
+            continue
+        b = min(e, cs)
+        a = max(s, b - need)
+        left.insert(0, (a, b))
+        need -= b - a
+    need = maxw
+    for s, e in exons:
+        if e <= ce or need == 0:
+            continue
+        a = max(s, ce)
+        b = min(e, a + need)
+        right.append((a, b))
+        need -= b - a
+    return (left, right) if strand == "+" else (right, left)
+
+
+@st.cache_data(show_spinner=False)
+def _flank_bigwig_paths(strand_tag):
+    """Local paths of the three P-site frame bigWigs for one strand, or None.
+
+    Uses Code/data/browser_tracks/ when present (local checkout); otherwise
+    downloads from the HF dataset's browser_tracks/ (git-ignored, ~38 MB each).
+    """
+    paths = []
+    for k in range(3):
+        name = f"adult_psite.f{k}.{strand_tag}.bw"
+        local = FLANK_BW_DIR / name
+        p = str(local) if local.exists() else _localize_hf_asset(f"browser_tracks/{name}")
+        if not p:
+            return None
+        paths.append(p)
+    return paths
+
+
+@st.cache_data(show_spinner=False, max_entries=256)
+def get_flank_profile(gene_id):
+    """Per-nt P-sites over 1 kb upstream + CDS + 1 kb downstream, or None.
+
+    x is nt relative to the first nt of the start codon (negative = upstream);
+    `known` marks flank positions inside an annotated GENCODE CDS.
+    """
+    rec = load_flank_structures().get(gene_id)
+    if rec is None:
+        return None
+    try:
+        import pyBigWig
+    except ImportError:
+        return None
+    strand, chrom = rec['strand'], rec['chrom']
+    paths = _flank_bigwig_paths('fwd' if strand == '+' else 'rev')
+    if paths is None:
+        return None
+    exons, cds = _parse_blocks(rec['exons']), _parse_blocks(rec['cds'])
+    ann = _parse_blocks(rec['annotated_cds'])
+    stop = str(rec['stop_moved_into_cds']) == 'True'
+    up, dn = _flank_tx_segs(exons, cds, strand, max(FLANK_WINDOWS) + 3 * stop)
+    unit = 1e6 / FLANK_PSITE_TOTAL
+    try:
+        bws = [pyBigWig.open(p) for p in paths]
+    except Exception:
+        return None
+
+    def _arr(segs):
+        vals, msk = [], []
+        for s, e in segs:
+            vals.append(np.round(sum(np.nan_to_num(np.array(b.values(chrom, s, e)))
+                                     for b in bws) / unit))
+            m = np.zeros(e - s, bool)
+            for a, b2 in ann:
+                if a < e and b2 > s:
+                    m[max(a, s) - s:min(b2, e) - s] = True
+            msk.append(m)
+        if strand == '-':
+            vals = [v[::-1] for v in vals][::-1]
+            msk = [m[::-1] for m in msk][::-1]
+        cat = lambda xs: np.concatenate(xs) if xs else np.zeros(0)
+        return cat(vals), cat(msk).astype(bool)
+
+    try:
+        cv, _ = _arr(cds)
+        uv, um = _arr(up)
+        dv, dm = _arr(dn)
+    except Exception:
+        return None
+    finally:
+        for b in bws:
+            b.close()
+    if stop:
+        cv = np.concatenate([cv, dv[:3]])
+        dv, dm = dv[3:], dm[3:]
+    L = len(cv)
+    return {
+        'x': np.concatenate([np.arange(-len(uv), 0), np.arange(L), L + np.arange(len(dv))]),
+        'y': np.concatenate([uv, cv, dv]),
+        'known': np.concatenate([um, np.zeros(L, bool), dm]),
+        'cds_len': L,
+    }
+
+
+def _runs(mask, x):
+    """(x0, x1) spans of consecutive True positions."""
+    out, start = [], None
+    for xi, m in zip(x, mask):
+        if m and start is None:
+            start = xi
+        elif not m and start is not None:
+            out.append((start, prev))
+            start = None
+        prev = xi
+    if start is not None:
+        out.append((start, prev))
+    return out
+
+
+def _build_flank_figure(prof, log_y):
+    x, y, L = prof['x'], prof['y'], prof['cds_len']
+    fig = go.Figure()
+    fig.add_vrect(x0=-0.5, x1=L - 0.5, fillcolor='rgba(255,255,255,0.10)', line_width=0,
+                  annotation_text='smORF CDS', annotation_position='top left',
+                  annotation_font=dict(size=10, color='#cbd5e1'))
+    for i, (a, b) in enumerate(_runs(prof['known'], x)):
+        fig.add_vrect(x0=a - 0.5, x1=b + 0.5, fillcolor='rgba(203,213,225,0.05)',
+                      line=dict(color='rgba(203,213,225,0.25)', width=1, dash='dot'),
+                      annotation_text='annotated CDS' if i == 0 else None,
+                      annotation_position='top left',
+                      annotation_font=dict(size=10, color='#94a3b8'))
+    for w in FLANK_WINDOWS[:-1]:
+        for xv in (-w - 0.5, L - 1 + w + 0.5):
+            if x.min() <= xv <= x.max():
+                fig.add_vline(x=xv, line=dict(color='rgba(255,255,255,0.28)', width=1,
+                                              dash='dash'))
+                fig.add_annotation(x=xv, y=1.0, yref='paper', text=f'{w}', showarrow=False,
+                                   yanchor='bottom', font=dict(size=9, color='#94a3b8'))
+    nz = y > 0
+    fr = np.mod(x, 3)
+    for k in range(3):
+        m = nz & (fr == k)
+        fig.add_trace(go.Bar(
+            x=x[m], y=y[m], width=1, name=f'Frame {k}' + (' (in frame)' if k == 0 else ''),
+            marker=dict(color=FLANK_FRAME_COLORS[k], line=dict(width=0)),
+            hovertemplate=f'%{{x}} nt · %{{y:,}} P-sites<extra>Frame {k}</extra>',
+        ))
+    fig.update_layout(
+        height=340, barmode='overlay', bargap=0,
+        margin=dict(l=8, r=8, t=36, b=40),
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color='#e2e8f0', size=11),
+        legend=dict(orientation='h', y=-0.22, x=0, font=dict(size=10),
+                    bgcolor='rgba(0,0,0,0)'),
+    )
+    fig.update_xaxes(title='nt from start codon (dashed lines: 50/100/250-nt windows)',
+                     showgrid=False, zeroline=False, tickfont=dict(size=9))
+    fig.update_yaxes(title='P-sites', type='log' if log_y else 'linear',
+                     gridcolor='rgba(255,255,255,0.08)', zeroline=False, tickfont=dict(size=9))
+    return fig
+
+
+def _render_flank_section(row):
+    """Flanking Ribo-seq: per-window table + live P-site plot."""
+    def _nearest(side):
+        for w in FLANK_WINDOWS:
+            v = row.get(f'Flank_{side}{w}_psites')
+            if _not_na(v) and v >= 1:
+                return f'{w} nt'
+        return 'none within 1 kb'
+
+    _kv_section('Flanking Ribo-seq', [
+        ('CDS P-sites', _fmt(row.get('Flank_cds_psites'), '%d')),
+        ('CDS length', f"{int(row.get('Flank_cds_len'))} nt"),
+        ('Nearest upstream P-site', _nearest('up')),
+        ('Nearest downstream P-site', _nearest('down')),
+    ], ncols=4)
+
+    recs = []
+    for s in FLANK_SIDES:
+        for w in FLANK_WINDOWS:
+            g = lambda k: row.get(f'Flank_{s}{w}_{k}')
+            recs.append({
+                'Side': FLANK_SIDE_LABEL[s], 'Window (nt)': w,
+                'nt available': g('len'), 'P-sites': g('psites'),
+                'Density ÷ CDS': g('density_over_cds'),
+                'nt in annotated CDS': g('annCDS_bp'),
+                '% Frame 0': g('pct_f0'), '% Frame 1': g('pct_f1'), '% Frame 2': g('pct_f2'),
+                'P-sites used for frame': g('clean_n'),
+            })
+    st.dataframe(pd.DataFrame(recs), hide_index=True, width='stretch', column_config={
+        'Density ÷ CDS': st.column_config.NumberColumn(format='%.2f'),
+        **{f'% Frame {k}': st.column_config.NumberColumn(format='%.1f') for k in range(3)},
+        **{c: st.column_config.NumberColumn(format='%d') for c in
+           ('nt available', 'P-sites', 'nt in annotated CDS', 'P-sites used for frame')},
+    })
+    st.caption(
+        "Windows walk along the host transcript and stop at its ends (\"nt available\"). "
+        "Frame is relative to the smORF start codon (Frame 0 = in frame). Frame % uses only "
+        "positions outside annotated GENCODE CDS and skips the 6 nt just upstream of the start "
+        "codon, where the initiation peak spills over; ~33/33/33 means no frame bias."
+    )
+
+    gid = row.get('Flank_gene_id')
+    if not _not_na(gid):
+        return
+    log_y = st.toggle('Log scale', value=True, key=f'flank_log_{gid}')
+    with st.spinner('Reading P-site tracks…'):
+        prof = get_flank_profile(str(gid))
+    if prof is None:
+        st.caption("P-site plot unavailable: the P-site tracks (or pyBigWig) could not be loaded.")
+        return
+    st.plotly_chart(_build_flank_figure(prof, log_y), use_container_width=True,
+                    key=f"flank_{gid}", config={'displaylogo': False})
 
 
 def _sec_singlecell(row, ctx):

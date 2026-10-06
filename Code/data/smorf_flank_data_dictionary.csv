@@ -1,0 +1,12 @@
+column,meaning
+gene_id,smORF ID (master gene_id; UniProt accession for TrEMBL)
+source,"Salk (novel smORF, microprotein GTF) or TrEMBL (smORF Rules track BED)"
+cds_len,"CDS length in nt (spliced), including the stop codon"
+stop_moved_into_cds,"True when the source CDS coordinates excluded the stop codon, so its 3 nt were taken from the 3' flank"
+cds_psites,"Adult-brain P-sites in the CDS, all frames, same strand"
+"<side><window>, side = up|down, window = 50|100|250|1000 nt_len",nt of host transcript available in the window (< window when the transcript ends first)
+"<side><window>, side = up|down, window = 50|100|250|1000 nt_psites","P-sites in the window, all frames"
+"<side><window>, side = up|down, window = 50|100|250|1000 nt_density_over_cds",P-sites per nt in the window divided by P-sites per nt in the CDS
+"<side><window>, side = up|down, window = 50|100|250|1000 nt_annCDS_bp",nt of the window overlapping an annotated GENCODE CDS on the same strand
+"<side><window>, side = up|down, window = 50|100|250|1000 nt_clean_n",P-sites used for the frame percentages: excludes annotated-CDS positions and the 6 nt just upstream of the start codon
+"<side><window>, side = up|down, window = 50|100|250|1000 nt_pct_f0/1/2",% of clean P-sites in frame 0/1/2 relative to the smORF start (frame 0 = in frame; ~33/33/33 = no frame bias)

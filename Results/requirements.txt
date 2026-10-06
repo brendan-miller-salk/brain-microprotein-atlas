@@ -6,3 +6,7 @@ huggingface_hub>=0.32.0
 hf_xet>=1.0.0
 pyarrow>=14.0
 
+# Flanking Ribo-seq plot (entry page) reads the P-site bigWigs. Pinned: 0.3.25 is
+# the newest release with manylinux wheels for py3.11 (0.3.26 builds from source,
+# which fails in the python:3.11-slim image).
+pyBigWig==0.3.25

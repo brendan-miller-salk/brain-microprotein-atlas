@@ -42,6 +42,11 @@ as the `R_TEMPLATE` string, for the R-based modules.
 | `blast_isoform_reference_sequences.fasta` | small | `Microprotein_annotation_summary/compute_nterm_peptide_substitutions.py` (cache; fetched from UniProt) |
 | `blast_nterm_peptide_substitutions.csv` | small | `Results/microproteins_dashboard.py` (N-terminus filter) |
 | `psite_frame_counts_per_orf.tsv` | 15 M | `RP3_analysis/Psite_frame_mapping.py`; P-site counts per codon position for every GTF CDS (made by `RP3_analysis/psite_frame_counts_per_orf.py`) |
+| `unreviewed_microproteins_peptide_flags.csv` | 1.3 M | `Results/microproteins_dashboard.py` (Peptide Specificity facet, column, entry table); made by `Peptide_specificity/` |
+| `peptide_flags_data_dictionary.csv` | 2 K | column definitions for the above |
+| `smorf_flank_psites.csv` | 1.3 M | `Results/microproteins_dashboard.py` (Flanking Ribo-seq facet, columns, entry section); made by `RP3_analysis/smorf_flank_psites.py` |
+| `smorf_flank_structure.csv` | 1.3 M | `Results/microproteins_dashboard.py` (entry-page P-site plot); same script |
+| `smorf_flank_data_dictionary.csv` | 1 K | column definitions for `smorf_flank_psites.csv` |
 | `browser_tracks/` | 51 M | UCSC custom-track definition (`brain_tracks.txt`, not read by any script) plus the six bigWig/bigBed binaries it loads |
 
 ## UCSC genome-browser tracks
@@ -82,6 +87,18 @@ the dashboard's ORF Rules column reads, via `load_decay_classes()`; its
 `nsd_gate_reason` record why each smORF did or did not qualify as non-stop
 decay. Their generating scripts (`transcript_rules/`, `espresso/`,
 `nmd_analysis/`) live outside this repo, in Box.
+
+`unreviewed_microproteins_peptide_flags.csv` holds one row for each of the
+4,814 unreviewed master entries (Salk + TrEMBL; Swiss-Prot is not flagged). It
+joins to the master on `gene_id` one-to-one, and its `sequence` column doubles
+as a join check. For every detected MS peptide, the table records whether the
+same peptide (I = L), a same-mass rearrangement or a deamidation-like variant
+occurs in another human UniProt protein, and whether trypsin would release it
+from there. The per-entry verdict is in `interpretation`; the side-by-side
+twin columns are ` | `-separated, in matching order. The dashboard reads it
+via `load_peptide_flags()`. Column definitions are in
+`peptide_flags_data_dictionary.csv`, and method, verdict counts and caveats are
+in [`../Peptide_specificity/README.md`](../Peptide_specificity/README.md).
 
 ## Not in a clone
 

@@ -9,8 +9,8 @@
 
 **[Open the interactive atlas →](https://huggingface.co/spaces/brmiller/brain-microprotein-atlas-app)**
 
-Search any microprotein and see its sequence, PROSIT spectra, and
-AD differential expression.
+Search any microprotein and see its sequence, PROSIT spectra, Ribo-seq
+P-site profile, and AD differential expression.
 
 > ### Build your own subset
 > Stack any of the filters below, then **export the result as a filtered
@@ -24,14 +24,14 @@ Filters available:
 |---|---|
 | **Status** | Reviewed (Swiss-Prot) vs unreviewed (Salk/TrEMBL) |
 | **smORF Type** | Top-level category — `iORF`, `Iso`, `uORF`, `dORF`, `lncRNA` … plus downstream sub-types |
-| **Evidence & Quality** | TMT-MS ID, RiboCode-ShortStop, and PROSIT confidence tier |
+| **Evidence & Quality** | PROSIT spectra-quality tier · Ribosome coverage (RiboCode-ShortStop, any P-sites, flanking P-sites within 1 kb) · **Flanking Ribo-seq** (≥1 P-site within 50/100/250/1000 nt upstream and/or downstream of the smORF) · minimum peptide count · b/y fragment-ion coverage · peptide specificity (are an unreviewed entry's peptides unique in human UniProt?) |
 | **Differential Expression** | TMT tiers 1–4 (FDR × sample coverage); ROSMAP RNA-seq FDR < 0.05 / < 0.2 |
 | **ShortStop Label** | Ribosome-profiling classification |
-| **Score & Length** | Sliders for protein length, unique spectral counts, PhyloCSF |
+| **Score & Length** | Sliders for protein length, unique spectral counts, PhyloCSF, UniProt annotation score |
 | **Start Codon** | ATG vs non-ATG (near-cognate / non-standard) |
 | **ORF Rules** | Predicted decay fate (NMD / NSD / neither) × whether the smORF shifts the host's main ORF |
 | **Kozak Context** | Sequence-context strength at the start codon (Non-UniProt smORFs only) |
-| **N-terminus Options** | M-excision, acetylation |
+| **N-terminus Options** | Peptides past the Met-excision site, or Nt-acetylated / substitution-distinct N-terminal peptides |
 
 Each microprotein also links straight into the **[AD Dark Microproteome UCSC session](https://genome.ucsc.edu/s/brmiller/AD%20Dark%20Microproteome)**
 (hg38), which loads the Ribo-seq, long-read isoform, PROSIT peptide, and smORF
@@ -82,8 +82,9 @@ Full record counts, column definitions, and per-file details:
 │   ├── data/                                shared input tables
 │   ├── Microprotein_annotation_summary/     smORF discovery, classification, GTF/BED/FASTA export
 │   ├── Codon_context/                       Kozak strength and non-ATG initiation
-│   ├── RP3_analysis/                        Ribo-seq translation evidence (RiboCode)
+│   ├── RP3_analysis/                        Ribo-seq translation evidence (RiboCode, flanking P-sites)
 │   ├── Peptide_TMT_analysis/                TMT-MS proteomics + PROSIT spectral validation
+│   ├── Peptide_specificity/                 are unreviewed entries' peptides unique in human UniProt?
 │   ├── Shortread_RNA_analysis/              ROSMAP/MSBB short-read DESeq2
 │   ├── Longread_RNA_analysis/               Nanopore ESPRESSO isoforms
 │   ├── scRNAseq_summary_merging_analysis/   Mathys 2024 cell-type enrichment

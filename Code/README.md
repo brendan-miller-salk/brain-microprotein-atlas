@@ -21,6 +21,7 @@ steps, without executing anything.
 | [`Codon_context/`](Codon_context/) | Start-codon context: Kozak strength and non-ATG initiation | `initiation_pipeline.py`, `kozak_pipeline.py` |
 | [`RP3_analysis/`](RP3_analysis/) | Ribo-seq translation evidence (RiboCode) | `RP3_Results_summary.py` |
 | [`Peptide_TMT_analysis/`](Peptide_TMT_analysis/) | FragPipe TMT-MS processing, TAMPOR batch correction, and PROSIT spectral-angle validation | `Proteomics_Results_summary.py` |
+| [`Peptide_specificity/`](Peptide_specificity/) | Do unreviewed entries' MS peptides also occur (identical, I=L, same mass, or as a non-tryptic fragment) in another human UniProt protein? Needs the UniProt FASTA, so it is not part of `run_all_analyses.sh`; its output ships in `data/` | `make_peptide_flags.py`, `add_twin_peptides.py` |
 | [`Shortread_RNA_analysis/`](Shortread_RNA_analysis/) | ROSMAP / MSBB short-read DESeq2 differential expression (R) | `Short-Read_Transcriptomics_Results_summary.py` |
 | [`Longread_RNA_analysis/`](Longread_RNA_analysis/) | Nanopore ESPRESSO isoform differential expression (R) | `Long-Read_Transcriptomics_Results_summary.py` |
 | [`scRNAseq_summary_merging_analysis/`](scRNAseq_summary_merging_analysis/) | Mathys et al. 2024 cell-type enrichment (R) | `scRNAseq_summary.R` |

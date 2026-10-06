@@ -1,0 +1,16 @@
+column,meaning
+interpretation,One-line verdict for the entry's MS evidence
+entry_peptides,"All detected peptides of this entry, shown as previous.PEPTIDE.next residue within the entry (^ = entry start, $ = entry end)"
+matched_entry_peptide,The entry peptide(s) that also match another protein (' | ' separates multiple peptides; same order in the next columns)
+twin_peptide,"The matching stretch in the other protein, shown as previous.PEPTIDE.next residue in that protein"
+differences,"Residue differences entry→twin, e.g. I3L (I at position 3 is L in the twin), GA4-5Q (GA at 4–5 is Q in the twin); 'none' = letter-identical"
+twin_peptide_protein,"UniProt accession|gene of the protein carrying the twin, with residue positions"
+twin_peptide_trypsin,"Whether trypsin releases the twin from that protein: tryptic, semi-tryptic (one non-trypsin cut needed), non-tryptic (two)"
+peptide_match_in_UniProt,"Whether the detected peptides occur in any other UniProt human protein (Swiss-Prot + TrEMBL + isoforms, UP000005640). 'identical sequence' = letter-for-letter the same; 'identical except I/L' = same except isoleucine/leucine, which have identical mass and cannot be told apart by MS; 'different sequence, same mass' = same atoms, residues rearranged (e.g. QLLFPIVR vs QLLPFLVR); 'unique' = no match"
+peptides_with_this_match,all = every detected peptide has the match; some = only some (the rest are unique)
+matching_protein,Gene name(s) of the other protein(s) containing the peptide
+matching_protein_is_same_gene,yes = the other protein is from the same gene as this entry (e.g. the full-length protein)
+how_matching_protein_would_give_this_peptide,"Whether trypsin would release this peptide from the matching protein. The search allowed only trypsin cuts, so 'needs a non-trypsin cut' peptides were never considered for the matching protein and were credited to this entry, whose start/end creates the cut"
+n_fragment_ions_that_distinguish,Only for rearranged same-mass matches: number of b/y ions whose mass differs between the two sequences (0 = spectrum cannot separate them)
+n_independent_peptide_sites,Number of non-overlapping peptide locations on the entry
+min_peptide_len,Length of the shortest detected peptide
