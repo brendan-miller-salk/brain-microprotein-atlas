@@ -5617,11 +5617,13 @@ def _build_flank_figure(prof, log_y):
                   annotation_text='smORF CDS', annotation_position='top left',
                   annotation_font=dict(size=10, color='#cbd5e1'))
     for i, (a, b) in enumerate(_runs(prof['known'], x)):
+        # Label only the first span. Any annotation_* kwarg without text makes
+        # plotly draw its placeholder "new text", so the rest get none at all.
+        _lbl = (dict(annotation_text='annotated CDS', annotation_position='top left',
+                     annotation_font=dict(size=10, color='#94a3b8')) if i == 0 else {})
         fig.add_vrect(x0=a - 0.5, x1=b + 0.5, fillcolor='rgba(203,213,225,0.05)',
                       line=dict(color='rgba(203,213,225,0.25)', width=1, dash='dot'),
-                      annotation_text='annotated CDS' if i == 0 else None,
-                      annotation_position='top left',
-                      annotation_font=dict(size=10, color='#94a3b8'))
+                      **_lbl)
     for w in FLANK_WINDOWS[:-1]:
         for xv in (-w - 0.5, L - 1 + w + 0.5):
             if x.min() <= xv <= x.max():
@@ -5697,7 +5699,7 @@ def _render_flank_section(row):
     gid = row.get('Flank_gene_id')
     if not _not_na(gid):
         return
-    log_y = st.toggle('Log scale', value=True, key=f'flank_log_{gid}')
+    log_y = st.toggle('Log scale', value=False, key=f'flank_log_{gid}')
     with st.spinner('Reading P-site tracks…'):
         prof = get_flank_profile(str(gid))
     if prof is None:
