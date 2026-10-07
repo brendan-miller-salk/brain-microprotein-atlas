@@ -460,6 +460,25 @@ COLUMN_DESCRIPTIONS = {
     'P-site % Frame 1': 'Percent of the ORF\'s P-sites at codon position 2.',
     'P-site % Frame 2': 'Percent of the ORF\'s P-sites at codon position 3.',
     'P-site Frame 0 RPKM': 'Frame-0 P-sites per kb of CDS per million P-sites (41 adult Ribo-seq libraries).',
+    'Host CDS Frame 0 RPKM': ('Frame-0 P-site RPKM of the main CDS of the host gene, in the same units as '
+                              'P-site Frame 0 RPKM. Salk/TrEMBL smORFs with a host CDS only.'),
+    'smORF/Host Ratio (frame 0)': ('P-site Frame 0 RPKM ÷ Host CDS Frame 0 RPKM, no pseudocount: each ORF '
+                                   'counted in its own reading frame. The basis for smORFs that overlap or sit '
+                                   'inside the host CDS.'),
+    'smORF/Host Ratio (all frames)': ('smORF ÷ host CDS RPKM on all P-sites (all frames), no pseudocount. The '
+                                      'basis for uORFs and dORFs clear of the host CDS; for overlapping smORFs it '
+                                      'includes the host\'s own ribosomes, so read the frame-0 ratio there.'),
+    'Host CDS Comparison': ('ORF denser = the smORF and the host start codon lie on one transcript model, the '
+                            'host CDS has ≥20 and the smORF ≥10 P-sites, and the ratio is > 1, all on the '
+                            'Comparison Basis. Otherwise: Host denser (ratio ≤ 1), Low ORF coverage (ratio > 1 '
+                            'on <10 P-sites), Low host coverage, Not on shared mRNA, or In-frame (not '
+                            'comparable). Blank = not compared (Swiss-Prot, lncRNA, psORF, eORF, smORFs without '
+                            'an identifiable host CDS, TrEMBL without P-site counts).'),
+    'Comparison Basis': ('Which density the comparison uses: all frames for uORFs and dORFs that do not '
+                         'overlap the host CDS; frame 0 for smORFs that overlap or sit inside it, so host '
+                         'ribosomes on shared codons are not counted for the smORF.'),
+    'Host CDS': ('Gene symbol and Ensembl transcript of the host CDS: the smORF transcript\'s own annotated '
+                 'CDS, else the host gene\'s MANE Select (or Ensembl canonical) CDS.'),
     **{f'{_sl} P-sites {_w} nt': (f"Ribo-seq P-sites within {_w} nt {'upstream (5′)' if _s == 'up' else 'downstream (3′)'} "
                                    "of the CDS along the host transcript (fewer nt if the transcript ends first). "
                                    "Salk/TrEMBL only.")
@@ -1559,6 +1578,61 @@ FLANK_HELP = (
     "combine with AND. Salk and TrEMBL entries only; Swiss-Prot is not assessed."
 )
 
+# Parent gene of TrEMBL entries: the gene at their CDS locus
+# (Code/Microprotein_annotation_summary/trembl_locus_genes.py), replacing the
+# master's UniProt name where that is a placeholder, outdated, or a paralogue;
+# keyed on master gene_id.
+TREMBL_LOCUS_CSV = (Path(__file__).resolve().parent.parent / "Code" / "data" /
+                    "trembl_locus_genes.csv")
+
+# smORF vs host-CDS ribosome density (Code/RP3_analysis/smorf_host_cds_density.py):
+# RPKM of each Salk/TrEMBL smORF over that of its host gene's main CDS, all frames
+# for uORFs/dORFs clear of the host CDS and frame 0 otherwise, from
+# psite_frame_counts_per_orf.tsv; keyed on master gene_id. The comparable /
+# denser calls are made by the script; the dashboard only tiers them.
+HOSTCDS_CSV = (Path(__file__).resolve().parent.parent / "Code" / "data" /
+               "smorf_host_cds_density.csv")
+HOSTCDS_COLS = ['orf_codons', 'comparable', 'orf_denser', 'rpkm_ratio', 'rpkm_ratio_f0',
+                'rpkm_ratio_all', 'density_basis', 'call', 'host_rpkm_f0', 'host_symbol',
+                'host_tx']
+# Ribo-seq column view: unified column -> display name.
+HOSTCDS_TABLE_COLS = {
+    'HostCDS_host_rpkm': 'Host CDS Frame 0 RPKM',
+    'HostCDS_ratio_f0': 'smORF/Host Ratio (frame 0)',
+    'HostCDS_ratio_all': 'smORF/Host Ratio (all frames)',
+    'HostCDS_call': 'Host CDS Comparison',
+    'HostCDS_basis': 'Comparison Basis',
+    'HostCDS_host': 'Host CDS',
+}
+# Facet tiers: ratio > 1, >= 2, >= 10. Nested, so ticking several = the lowest.
+HOSTCDS_TIERS = (1, 2, 10)
+# A label must not start with '>': Streamlit labels are markdown (blockquote).
+HOSTCDS_TIER_LABEL = {1: 'Denser than host (>1×)', 2: '≥2× host density',
+                      10: '≥10× host density'}
+HOSTCDS_HELP = (
+    "Ribo-seq density on the smORF compared with the main coding sequence (CDS) of "
+    "its host gene, as P-sites per kb per million (RPKM, 41 adult DLPFC libraries); "
+    "the ratio is smORF over host CDS. uORFs and dORFs that do not overlap the host "
+    "CDS are compared on all their P-sites (all frames). smORFs that overlap or sit "
+    "inside the host CDS are compared on frame-0 P-sites only (each ORF in its own "
+    "reading frame, as in the P-site Frame 0 RPKM column), so the host's ribosomes on "
+    "shared codons are not counted for the smORF. Tick a tier to keep smORFs more than "
+    "1×, at least 2× or at least 10× as dense as the host CDS. Tiers are nested, so "
+    "ticking several is the same as ticking the lowest.\n\n"
+    "A smORF is compared only when it and the host start codon lie on one transcript "
+    "model (GENCODE, ENCODE4 or ESPRESSO long-read) and the host CDS has at least 20 "
+    "P-sites; it counts as denser only with at least 10 P-sites of its own (both counted "
+    "on the same basis). In-frame isoforms (Iso, N-Iso, D-Iso) and TrEMBL entries "
+    "overlapping the host CDS are not compared: their P-sites are largely the host's "
+    "own.\n\n"
+    "Not compared: Swiss-Prot, lncRNA, psORF and eORF entries, smORFs with no "
+    "identifiable host CDS, and TrEMBL entries without their own P-site counts. Most "
+    "TrEMBL entries either lack those or overlap the host CDS, so very few TrEMBL "
+    "entries are compared. Density is "
+    "ribosome occupancy, not protein output; a high ratio can also reflect stalled "
+    "ribosomes, and start/stop-codon pile-up on short ORFs is not removed."
+)
+
 
 def _resolve_master_source(csv_path=MASTER_CSV):
     """Return a path pandas can read for the master table.
@@ -1731,6 +1805,64 @@ def load_flank_structures(_csv_path=str(FLANK_STRUCT_CSV)):
     return s.set_index('gene_id').to_dict('index')
 
 
+@st.cache_data(show_spinner=False)
+def load_trembl_locus_genes(_csv_path=str(TREMBL_LOCUS_CSV)):
+    """TrEMBL entries whose parent gene differs from the master name, keyed on
+    master gene_id: TrEMBLLocus_symbol (the gene at the CDS locus, shown as
+    Parent Gene) and TrEMBLLocus_prev (the master name, still searchable). None
+    if the file is unavailable, so Parent Gene falls back to the master name.
+    """
+    p = Path(_csv_path)
+    if not p.exists():
+        return None
+    try:
+        f = pd.read_csv(p, usecols=['gene_id', 'master_name', 'locus_gene'])
+    except Exception:
+        return None
+    f = f[f['locus_gene'].notna() & f['locus_gene'].ne(f['master_name'])]
+    return pd.DataFrame({'gene_id': f['gene_id'],
+                         'TrEMBLLocus_symbol': f['locus_gene'].astype(str),
+                         'TrEMBLLocus_prev': f['master_name'].astype(str)})
+
+
+@st.cache_data(show_spinner=False)
+def load_hostcds_density(_csv_path=str(HOSTCDS_CSV)):
+    """smORF vs host-CDS ribosome density keyed on master gene_id.
+
+    Returns gene_id, HostCDS_orf_codons (checked against the protein length in
+    load_and_filter_master), HostCDS_tier (NaN = not compared, 0 = compared but
+    not denser, else the highest HOSTCDS_TIERS step the smORF reaches) and the
+    HOSTCDS_TABLE_COLS shown in the Ribo-seq column view. None if the file is
+    unavailable, so the facet and columns disappear. The tier follows rpkm_ratio,
+    the ratio the script's call uses (all frames or frame 0, per density_basis).
+    """
+    p = Path(_csv_path)
+    if not p.exists():
+        return None
+    try:
+        f = pd.read_csv(p, usecols=['gene_id', *HOSTCDS_COLS])
+    except Exception:
+        return None
+    comparable = f['comparable'].astype(str).str.strip().str.lower().eq('true')
+    denser = f['orf_denser'].astype(str).str.strip().str.lower().eq('true')
+    ratio = pd.to_numeric(f['rpkm_ratio'], errors='coerce')
+    tier = pd.Series(0.0, index=f.index)
+    for t in HOSTCDS_TIERS:  # ascending; 'denser' already means ratio > 1
+        tier = tier.mask(denser & ratio.ge(t), float(t))
+    sym, tx = f['host_symbol'], f['host_tx'].astype(str)
+    return pd.DataFrame({
+        'gene_id': f['gene_id'],
+        'HostCDS_orf_codons': pd.to_numeric(f['orf_codons'], errors='coerce'),
+        'HostCDS_tier': tier.where(comparable),
+        'HostCDS_host_rpkm': pd.to_numeric(f['host_rpkm_f0'], errors='coerce'),
+        'HostCDS_ratio_f0': pd.to_numeric(f['rpkm_ratio_f0'], errors='coerce'),
+        'HostCDS_ratio_all': pd.to_numeric(f['rpkm_ratio_all'], errors='coerce'),
+        'HostCDS_call': f['call'].astype(str),
+        'HostCDS_basis': f['density_basis'].astype(str),
+        'HostCDS_host': np.where(sym.notna(), sym.astype(str) + ' (' + tx + ')', tx),
+    })
+
+
 # Best-tier ranking used to collapse the bracketed PROSIT `Confidence` list.
 _CONFIDENCE_RANK = {'Strong': 0, 'Moderate': 1, 'Weak': 2, 'Insufficient': 3}
 
@@ -1873,6 +2005,25 @@ def load_and_filter_master(_csv_path=str(MASTER_CSV)):
         _bad = mp["Flank_cds_len"].notna() & ~(_codons.eq(_aa) | _codons.eq(_aa + 1))
         _fcols = [c for c in mp.columns if c.startswith("Flank_")]
         mp.loc[_bad, _fcols] = np.nan
+
+    # Step 10: smORF vs host-CDS ribosome density, also keyed on gene_id (same
+    # reason). The table's smORF codon count (stop codon excluded) must equal
+    # the protein length; anything else means it was matched to a different ORF,
+    # and the row is left blank (HostCDS_tier NaN = not compared).
+    _host = load_hostcds_density()
+    if _host is not None and "gene_id" in mp.columns:
+        mp = mp.merge(_host, on="gene_id", how="left", validate="one_to_one")
+        _aa = mp["sequence"].astype(str).str.rstrip("*").str.len()
+        _bad = mp["HostCDS_orf_codons"].notna() & mp["HostCDS_orf_codons"].ne(_aa)
+        _hcols = [c for c in mp.columns if c.startswith("HostCDS_")]
+        mp.loc[_bad, _hcols] = np.nan
+
+    # Step 11: TrEMBL parent gene = the gene at the CDS locus, where it differs
+    # from the master's UniProt name (applied to Parent_Gene in
+    # extract_unified_fields). Keyed on gene_id (same reason).
+    _locus = load_trembl_locus_genes()
+    if _locus is not None and "gene_id" in mp.columns:
+        mp = mp.merge(_locus, on="gene_id", how="left", validate="one_to_one")
     return mp
 
 
@@ -2097,7 +2248,9 @@ def load_and_merge_all_data():
     _base_cols = [c for c in ['sequence', 'peptide_sequence', 'start', 'end',
                              'Confidence', 'NMD_Decay_Class', 'Peptide_Specificity',
                              'PepSpec_Partial', *PEPSPEC_COLS.values(),
-                             'Flank_gene_id', *(f'Flank_{c}' for c in FLANK_COLS)]
+                             'Flank_gene_id', *(f'Flank_{c}' for c in FLANK_COLS),
+                             'HostCDS_tier', *HOSTCDS_TABLE_COLS,
+                             'TrEMBLLocus_symbol', 'TrEMBLLocus_prev']
                   if c in mp.columns]
     _acetyl_cols = [c for c in ('Nt_acetyl_tryptic_peptide', 'Nt_acetyl_N_PSMs',
                                 'Nt_acetyl_PSM_fraction') if c in mp.columns]
@@ -2292,6 +2445,11 @@ def extract_unified_fields(master_df):
             or c.lower().endswith('gene body (name)')]
     if cols:
         ud['Parent_Gene'] = master_df[cols].bfill(axis=1).iloc[:, 0]
+    # TrEMBL entries named by the gene at their CDS locus where the master's
+    # UniProt name is a placeholder, outdated, or a paralogue.
+    if 'TrEMBLLocus_symbol' in master_df.columns:
+        _loc = master_df['TrEMBLLocus_symbol']
+        ud['Parent_Gene'] = _loc.where(_loc.notna(), ud.get('Parent_Gene'))
 
     # smORF Class
     cols = [c for c in master_df.columns
@@ -2691,6 +2849,10 @@ def _source_csv_paths():
         PSITE_FRAME_CSV,
         # Flanking Ribo-seq P-sites (Flanking Ribo-seq facet + entry section).
         FLANK_CSV,
+        # smORF vs host-CDS ribosome density (Ribo-seq Density vs Host CDS facet).
+        HOSTCDS_CSV,
+        # TrEMBL parent gene at the CDS locus (Parent Gene override).
+        TREMBL_LOCUS_CSV,
     ]
 
 
@@ -2936,7 +3098,7 @@ def _count_checkbox(key, label, n, help=None):
     """
     st.checkbox(
         f"{label} ({n:,})", key=key,
-        value=bool(st.session_state.get(key, False)),
+        value=bool(_stored_filter_value(key, False)),
         help=help,
     )
 
@@ -3017,7 +3179,7 @@ def _render_facet_checkboxes(series, key_prefix, order=None, help=None, label_fn
         # this, each click clears every other facet's selections.
         checked = st.checkbox(
             f"{label} ({n:,})", key=_key,
-            value=bool(st.session_state.get(_key, False)),
+            value=bool(_stored_filter_value(_key, False)),
             help=(help if i == 0 else None),
         )
         if checked:
@@ -3036,10 +3198,18 @@ def _render_facet_checkboxes(series, key_prefix, order=None, help=None, label_fn
 # measured: a checked facet reads True during the entry render and False on the
 # way back. The shadow key is a plain (non-widget) key, so nothing culls it.
 #
+# Culled keys are READ from the shadow (_stored_filter_value), not written back
+# into session_state. Every facet checkbox and range slider passes `value=`, and
+# Streamlit warns "created with a default value but also had its value set via
+# the Session State API" when such a widget's key was assigned earlier in the
+# same run. Only widgets created with no default are restored by assignment.
+#
 # Not recoverable this way: the table's column sort, which st.dataframe never
 # reports back to Python, and scroll position. Both are lost by design.
 _PERSIST_SHADOW = '_filter_state_shadow'
 _PERSIST_EXTRA = ('hero_search',)
+# Widgets created without `value=`/`index=`, so assigning their key cannot warn.
+_RESTORE_BY_ASSIGNMENT = ('hero_search', 'f_group_by')
 
 
 def _persisted_filter_keys():
@@ -3050,26 +3220,42 @@ def _persisted_filter_keys():
     ]
 
 
+def _stored_filter_value(key, default=None):
+    """A filter widget's value: live state if present, else its shadow copy.
+
+    A key is absent when its widget did not render on the previous run (the
+    entry-page detour, or a hidden facet such as Downstream sub-type or Kozak).
+    """
+    if key in st.session_state:
+        return st.session_state[key]
+    return (st.session_state.get(_PERSIST_SHADOW) or {}).get(key, default)
+
+
 def _snapshot_filter_state():
-    """Mirror live filter widgets into the shadow key. Call after they render."""
-    st.session_state[_PERSIST_SHADOW] = {
-        k: st.session_state[k] for k in _persisted_filter_keys()
-    }
+    """Mirror live filter widgets into the shadow key. Call after they render.
+
+    Merges rather than replaces, so a facet hidden for several runs keeps its
+    last value instead of dropping out of the shadow.
+    """
+    shadow = dict(st.session_state.get(_PERSIST_SHADOW) or {})
+    shadow.update({k: st.session_state[k] for k in _persisted_filter_keys()})
+    st.session_state[_PERSIST_SHADOW] = shadow
 
 
 def _restore_filter_state():
-    """Re-seed filter widgets from the shadow key.
+    """Re-seed the no-default filter widgets (search box, group-by) from the shadow.
 
     Must run *before* the widgets instantiate — assigning to a widget key after
     its widget exists on the same run raises. Only fills keys Streamlit culled,
-    so it never clobbers a selection the user is actively changing.
+    so it never clobbers a selection the user is actively changing. Every other
+    filter reads the shadow through _stored_filter_value instead (see above).
     """
     saved = st.session_state.get(_PERSIST_SHADOW)
     if not saved:
         return
-    for k, v in saved.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
+    for k in _RESTORE_BY_ASSIGNMENT:
+        if k in saved and k not in st.session_state:
+            st.session_state[k] = saved[k]
 
 
 def main():
@@ -3126,9 +3312,8 @@ def main():
                            expression_index, seq_to_coords)
         return
 
-    # Back on the table path: re-seed anything the entry-page detour culled.
-    # Must precede the search box and the sidebar, which are the widgets it
-    # restores.
+    # Back on the table path: re-seed the search box and group-by if the
+    # entry-page detour culled them. Must precede both widgets.
     _restore_filter_state()
 
     # ── Search-first landing strip (a distinct "sandbox" zone to explore by example) ──
@@ -3199,6 +3384,8 @@ def main():
             _smask = pd.Series(False, index=base_df.index)
             if 'Parent_Gene' in base_df.columns:
                 _smask = _smask | base_df['Parent_Gene'].str.contains(_sq, case=False, na=False)
+            if 'TrEMBLLocus_prev' in base_df.columns:
+                _smask = _smask | base_df['TrEMBLLocus_prev'].str.contains(_sq, case=False, na=False)
             if 'sequence' in base_df.columns:
                 _smask = _smask | base_df['sequence'].str.contains(_sq, case=False, na=False)
             base_df = base_df[_smask]
@@ -3224,11 +3411,11 @@ def main():
         _all_true = pd.Series(True, index=base_df.index)
 
         def _ss(key, default=None):
-            return st.session_state.get(key, default)
+            return _stored_filter_value(key, default)
 
         def _sel(prefix, domain):
             """Values in `domain` whose checkbox is currently ticked."""
-            return [v for v in domain if st.session_state.get(f"{prefix}_{v}", False)]
+            return [v for v in domain if _stored_filter_value(f"{prefix}_{v}", False)]
 
         def _col(name):
             return base_df[name] if name in base_df.columns else None
@@ -3266,6 +3453,7 @@ def main():
         selected_tmt_sig = _sel('f_tmt_sig', _dom_tmt_sig)
         selected_rna_sig = _sel('f_rna_sig', _dom_rna_sig)
         selected_flank = {_s: _sel(f'f_flank_{_s}', FLANK_WINDOWS) for _s in FLANK_SIDES}
+        selected_hostcds = _sel('f_hostcds', HOSTCDS_TIERS)
 
         # Slider bounds come from the full dataset so they never move underfoot.
         def _bounds(col, cast):
@@ -3372,6 +3560,11 @@ def main():
             _fc = f'Flank_{_s}{max(_ws)}_psites' if _ws else None
             if _fc and _col(_fc) is not None:
                 _add_mask(f'flank_{_s}', pd.to_numeric(base_df[_fc], errors='coerce') >= 1)
+        # Density vs host CDS: tiers nest, so the lowest ticked tier decides.
+        # HostCDS_tier is NaN for smORFs not compared, so they always drop out.
+        if selected_hostcds and _col('HostCDS_tier') is not None:
+            _add_mask('hostcds', pd.to_numeric(base_df['HostCDS_tier'], errors='coerce')
+                                 >= min(selected_hostcds))
 
         # Significance facets. Tier 1 = strongest (q<0.05, ≥50% samples) … Tier 4
         # = weakest (q<0.2, ≥1 sample). Checked boxes are OR'd, matching every
@@ -3509,6 +3702,15 @@ def main():
                                                 errors='coerce') >= 1).sum())
                         with _fcols[_i % 2]:
                             _count_checkbox(f"f_flank_{_s}_{_w}", f"{_w} nt", _n)
+            if 'HostCDS_tier' in base_df.columns:
+                st.markdown("**Ribo-seq Density vs Host CDS**", help=HOSTCDS_HELP)
+                _ht = pd.to_numeric(_narrow(skip='hostcds')['HostCDS_tier'],
+                                    errors='coerce')
+                st.caption(f"smORF ÷ host CDS RPKM · "
+                           f"{int(_ht.notna().sum()):,} compared in view")
+                for _t in HOSTCDS_TIERS:
+                    _count_checkbox(f"f_hostcds_{_t}", HOSTCDS_TIER_LABEL[_t],
+                                    int((_ht >= _t).sum()))
             st.markdown("**Peptide Evidence**")
             _pc = _peptide_count_series(_narrow(skip='peptides'))
             for _i, _n in enumerate(MIN_PEPTIDE_TIERS):
@@ -3589,7 +3791,8 @@ def main():
                 if not bounds or col not in base_df.columns:
                     return
                 st.slider(label, min_value=bounds[0], max_value=bounds[1],
-                          value=bounds, step=step, key=f"f_{name}_range", help=help)
+                          value=tuple(_ss(f"f_{name}_range", bounds)), step=step,
+                          key=f"f_{name}_range", help=help)
                 _rv = _narrow(skip=name)
                 _rng = _ss(f"f_{name}_range", bounds)
                 _n = int((_rv[col].between(_rng[0], _rng[1]) | _rv[col].isna()).sum())
@@ -3802,6 +4005,9 @@ def main():
         if _ws:
             _active_chips.append((f"{FLANK_SIDE_LABEL[_s]} Ribo-seq",
                                   f"≥1 P-site within {max(_ws)} nt"))
+    if selected_hostcds and 'HostCDS_tier' in unified_df.columns:
+        _active_chips.append(("Density vs host CDS",
+                              HOSTCDS_TIER_LABEL[min(selected_hostcds)]))
     if selected_tmt_sig:
         _active_chips.append(("TMT-MS", ", ".join(map(str, selected_tmt_sig))))
     if selected_rna_sig:
@@ -3945,6 +4151,7 @@ def main():
         'Psites_pct_frame1': 'P-site % Frame 1',
         'Psites_pct_frame2': 'P-site % Frame 2',
         'Psites_frame0_RPKM': 'P-site Frame 0 RPKM',
+        **HOSTCDS_TABLE_COLS,
         **FLANK_TABLE_COLS,
         'Tryptic_Peptides': 'Tryptic Peptides',
         '_Ladder_Display': 'b/y Coverage % per Peptide',
@@ -4158,7 +4365,7 @@ def _render_results_table(filtered_df, display_df):
             'RNA_LRT_Add_P', 'RNA_LRT_Int_P', 'RNA Significance',
         ],
         'Ribo-seq': [
-            'RiboCode', 'P-site Frame 0 RPKM',
+            'RiboCode', 'P-site Frame 0 RPKM', *HOSTCDS_TABLE_COLS.values(),
             'P-site % Frame 0', 'P-site % Frame 1', 'P-site % Frame 2',
             'RP3 Default', 'RP3 MM+Amb', 'RP3 Amb', 'RP3 MM',
             *FLANK_TABLE_COLS.values(),
@@ -4311,6 +4518,12 @@ def _render_results_table(filtered_df, display_df):
             'P-site % Frame 1': st.column_config.NumberColumn('P-site % Frame 1', help='Percent of ORF P-sites in frame 1', format='%.1f'),
             'P-site % Frame 2': st.column_config.NumberColumn('P-site % Frame 2', help='Percent of ORF P-sites in frame 2', format='%.1f'),
             'P-site Frame 0 RPKM': st.column_config.NumberColumn('P-site Frame 0 RPKM', help='Frame-0 P-sites per kb of CDS per million P-sites', format='%.3f'),
+            'Host CDS Frame 0 RPKM': st.column_config.NumberColumn('Host CDS Frame 0 RPKM', help=COLUMN_DESCRIPTIONS['Host CDS Frame 0 RPKM'], format='%.3f'),
+            'smORF/Host Ratio (frame 0)': st.column_config.NumberColumn('smORF/Host Ratio (frame 0)', help=COLUMN_DESCRIPTIONS['smORF/Host Ratio (frame 0)'], format='%.2f'),
+            'smORF/Host Ratio (all frames)': st.column_config.NumberColumn('smORF/Host Ratio (all frames)', help=COLUMN_DESCRIPTIONS['smORF/Host Ratio (all frames)'], format='%.2f'),
+            'Host CDS Comparison': st.column_config.TextColumn('Host CDS Comparison', help=COLUMN_DESCRIPTIONS['Host CDS Comparison']),
+            'Comparison Basis': st.column_config.TextColumn('Comparison Basis', help=COLUMN_DESCRIPTIONS['Comparison Basis']),
+            'Host CDS': st.column_config.TextColumn('Host CDS', help=COLUMN_DESCRIPTIONS['Host CDS']),
             **{_d: st.column_config.NumberColumn(_d, help=COLUMN_DESCRIPTIONS.get(_d),
                                                  format='%.1f' if '%' in _d else '%d')
                for _d in FLANK_TABLE_COLS.values()},

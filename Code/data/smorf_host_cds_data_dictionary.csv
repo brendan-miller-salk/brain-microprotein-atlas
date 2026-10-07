@@ -1,0 +1,29 @@
+column,meaning
+gene_id,smORF ID (master gene_id; UniProt accession for TrEMBL)
+source,Salk (novel smORF) or TrEMBL (unreviewed UniProt microprotein)
+subtype,Master smorf_type (TrEMBL for TrEMBL entries)
+group,"Comparison class: the master smorf_type family (uORF, dORF, iORF, In-frame isoform = Iso/N-Iso/D-Iso), with uORF and dORF split by overlap with the host CDS (uORF / uORF overlapping CDS, dORF / dORF overlapping CDS); TrEMBL entries by position (TrEMBL upstream / overlapping CDS / downstream). Only TrEMBL labels follow position, so see position for the rest"
+position,"smORF CDS relative to the host CDS on the genome, strand-aware: upstream, overlapping or downstream"
+shared_mrna,"True when the smORF and the host start codon lie on one transcript: the same transcript, or a compatible GENCODE v50, ENCODE4 or ESPRESSO long-read model in smorf_transcript_flags.tsv"
+host_choice,"How the host CDS was chosen: same transcript (the smORF transcript's own annotated CDS), or the host gene's MANE Select / Ensembl canonical CDS"
+host_symbol,Gene symbol of the host CDS
+host_tx,Ensembl transcript of the host CDS (psite_frame_counts_per_orf.tsv transcript_id)
+orf_tx,P-site row used for the smORF (psite_frame_counts_per_orf.tsv transcript_id)
+orf_codons,"smORF CDS codons, stop codon excluded (= protein length)"
+orf_psites_f0,Adult-brain P-sites in frame 0 of the smORF
+orf_rpkm_f0,smORF frame-0 P-sites per kb of CDS per million P-sites (Psites_frame0_RPKM)
+orf_psites_all,"Adult-brain P-sites on the smORF CDS, all frames (Psites_total)"
+orf_rpkm_all,smORF all-frame P-sites per kb of CDS per million P-sites
+host_codons,"Host CDS codons, stop codon excluded"
+host_psites_f0,Adult-brain P-sites in frame 0 of the host CDS
+host_rpkm_f0,Host CDS frame-0 P-sites per kb of CDS per million P-sites (Psites_frame0_RPKM)
+host_psites_all,"Adult-brain P-sites on the host CDS, all frames (Psites_total)"
+host_rpkm_all,Host CDS all-frame P-sites per kb of CDS per million P-sites
+rpkm_ratio_f0,"orf_rpkm_f0 / host_rpkm_f0, no pseudocount (empty when the host has no frame-0 P-sites)"
+rpkm_ratio_all,"orf_rpkm_all / host_rpkm_all, no pseudocount (empty when the host has no P-sites)"
+density_basis,"Density the call uses: all frames for groups TrEMBL downstream, TrEMBL upstream, dORF, uORF (no overlap with the host CDS); frame 0 otherwise, so host-frame ribosomes on shared codons are not counted for the smORF"
+rpkm_ratio,"The ratio the call uses (rpkm_ratio_all or rpkm_ratio_f0, per density_basis); whole-ORF sums, P-site pile-up at start and stop codons not removed"
+log2_rpkm_ratio,log2 of rpkm_ratio (empty when rpkm_ratio is empty or 0)
+call,"First matching rule, with P-site counts in the density_basis: In-frame (not comparable) | Not on shared mRNA | Low host coverage (host P-sites < 20) | ORF denser (smORF P-sites >= 10 and rpkm_ratio > 1) | Low ORF coverage (rpkm_ratio > 1 on fewer P-sites) | Host denser (rpkm_ratio <= 1)"
+comparable,"call is ORF denser, Host denser or Low ORF coverage"
+orf_denser,call is ORF denser

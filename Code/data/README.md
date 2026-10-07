@@ -41,12 +41,16 @@ as the `R_TEMPLATE` string, for the R-based modules.
 | `uniprotkb_proteome_UP000005640_2026_07_13.tsv` | 14 M | `Results/microproteins_dashboard.py` |
 | `blast_isoform_reference_sequences.fasta` | small | `Microprotein_annotation_summary/compute_nterm_peptide_substitutions.py` (cache; fetched from UniProt) |
 | `blast_nterm_peptide_substitutions.csv` | small | `Results/microproteins_dashboard.py` (N-terminus filter) |
-| `psite_frame_counts_per_orf.tsv` | 15 M | `RP3_analysis/Psite_frame_mapping.py`; P-site counts per codon position for every GTF CDS (made by `RP3_analysis/psite_frame_counts_per_orf.py`) |
+| `psite_frame_counts_per_orf.tsv` | 15 M | `RP3_analysis/Psite_frame_mapping.py`, `RP3_analysis/smorf_host_cds_density.py`; P-site counts per codon position for every GTF CDS (made by `RP3_analysis/psite_frame_counts_per_orf.py`) |
 | `unreviewed_microproteins_peptide_flags.csv` | 1.3 M | `Results/microproteins_dashboard.py` (Peptide Specificity facet, column, entry table); made by `Peptide_specificity/` |
 | `peptide_flags_data_dictionary.csv` | 2 K | column definitions for the above |
 | `smorf_flank_psites.csv` | 1.3 M | `Results/microproteins_dashboard.py` (Flanking Ribo-seq facet, columns, entry section); made by `RP3_analysis/smorf_flank_psites.py` |
 | `smorf_flank_structure.csv` | 1.3 M | `Results/microproteins_dashboard.py` (entry-page P-site plot); same script |
 | `smorf_flank_data_dictionary.csv` | 1 K | column definitions for `smorf_flank_psites.csv` |
+| `smorf_host_cds_density.csv` | 1.0 M | `Results/microproteins_dashboard.py` (Ribo-seq Density vs Host CDS facet, Ribo-seq columns); made by `RP3_analysis/smorf_host_cds_density.py` |
+| `smorf_host_cds_data_dictionary.csv` | 3 K | column definitions for `smorf_host_cds_density.csv` |
+| `smorf_transcript_flags.tsv` | 47 M | `RP3_analysis/smorf_host_cds_density.py`, `Microprotein_annotation_summary/trembl_locus_genes.py`; one row per smORF × compatible transcript (GENCODE v50, ENCODE4, ESPRESSO, plus `smORF_parent` rows the script skips) with its host gene, MANE Select / Ensembl canonical reference CDS, and whether that CDS's start codon lies on the transcript; made outside this repo |
+| `trembl_locus_genes.csv` | 67 K | `Results/microproteins_dashboard.py` (TrEMBL Parent Gene); made by `Microprotein_annotation_summary/trembl_locus_genes.py` |
 | `browser_tracks/` | 51 M | UCSC custom-track definition (`brain_tracks.txt`, not read by any script) plus the six bigWig/bigBed binaries it loads |
 
 ## UCSC genome-browser tracks

@@ -33,6 +33,24 @@ this repository; only the post-RiboCode summarization step lives here.
   which the dashboard uses to plot the profile live) and
   `smorf_flank_data_dictionary.csv`. Needs the git-ignored bigwigs and the
   933 MB combined GTF, so it is run by hand and not by `run_all_analyses.sh`.
+- **smORF vs host CDS**: `smorf_host_cds_density.py` compares Ribo-seq density
+  on each Salk and TrEMBL smORF with the main CDS of its host gene, as a ratio of
+  RPKMs from `psite_frame_counts_per_orf.tsv` with no pseudocount. uORFs and
+  dORFs that do not overlap the host CDS are compared on all P-sites
+  (`Psites_total`); smORFs that overlap or sit inside the host CDS on frame-0
+  P-sites (`Psites_frame0_RPKM`), so host ribosomes on shared codons are not
+  counted for the smORF. Both ratios are written. The host CDS is the annotated
+  CDS of the smORF's own transcript when it has one, else the host gene's MANE
+  Select (or Ensembl canonical) CDS from `Code/data/smorf_transcript_flags.tsv`.
+  A pair is comparable when the smORF and the host start codon lie on one
+  transcript model (GENCODE, ENCODE4 or ESPRESSO), the host has ≥ 20 P-sites,
+  and the smORF is not an in-frame class (`Iso`/`N-Iso`/`D-Iso` and TrEMBL
+  entries overlapping the host CDS are left out; lncRNA, psORF and eORF are not
+  compared); the smORF is denser when it also has ≥ 10 P-sites and a ratio > 1
+  (counts on the same basis as the ratio). Writes
+  `Code/data/smorf_host_cds_density.csv` and
+  `smorf_host_cds_data_dictionary.csv`. Reads only files in git, so
+  `run_all_analyses.sh` runs it.
 
 The RiboCode reference outputs themselves (BED / GTF / TXT and the RPKM
 mapping-group files) are also kept under `Results/RP3/` so the dashboard
@@ -49,6 +67,7 @@ python psite_frame_counts_per_orf.py --total-psites 116287730
 python Psite_frame_mapping.py      # writes Results/RP3/Psite_frame_by_sequence.csv
 # (optional) flanking P-sites; same bigwigs + GTF_and_BED_files/Ensembl_and_Unreviewed_Brain_Microproteins.gtf
 python smorf_flank_psites.py       # writes Code/data/smorf_flank_{psites,structure,data_dictionary}.csv (~20 s)
+python smorf_host_cds_density.py   # writes Code/data/smorf_host_cds_{density,data_dictionary}.csv (offline, ~5 s)
 python RP3_Results_summary.py
 ```
 
@@ -65,6 +84,7 @@ The script is also called automatically by
 - `../../Results/RP3/Psite_frame_by_sequence.csv`
 - `../data/smorf_flank_psites.csv`, `../data/smorf_flank_structure.csv`,
   `../data/smorf_flank_data_dictionary.csv`
+- `../data/smorf_host_cds_density.csv`, `../data/smorf_host_cds_data_dictionary.csv`
 - `../../supplementary/Table5_RP3_Results_summary.csv`
 - (Already present) `ribocode_results.{bed,gtf,txt}`,
   `ribocode_results_collapsed.*`, `mapping_groups_rpkm*.txt`,

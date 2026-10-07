@@ -23,6 +23,7 @@ This module provides:
 | `Create_BED_GTF_FASTA_files.py` | Generates the BED / GTF / FASTA / coordinate-mapping files in `GTF_and_BED_files/` for unreviewed brain microproteins, including the PROSIT confidence tiers and the Ribo-ShortStop bundle. |
 | `Create_Alt_Proteoform_Files.py` | Generates the `GTF_and_BED_files/Alt_Proteoforms/` bundle for alternative-initiation proteoforms. |
 | `alt_proteoform_records.py` | Record-building helpers imported by `Create_Alt_Proteoform_Files.py`. |
+| `trembl_locus_genes.py` | Names each TrEMBL entry by the gene at its CDS locus (GENCODE v50 host genes in `Code/data/smorf_transcript_flags.tsv`), replacing the master's UniProt name where it is a placeholder (LOC..., the accession), outdated, or a paralogue; writes `Code/data/trembl_locus_genes.csv`, which the dashboard uses for TrEMBL Parent Gene. |
 | `compute_nterm_peptide_substitutions.py` | BLASTs each N-terminal (aa 1-2) tryptic peptide against its matched UniProt isoform and records amino-acid substitutions, for the dashboard's N-terminus filter (`Code/data/blast_nterm_peptide_substitutions.csv`). |
 
 ## Usage
@@ -36,13 +37,14 @@ python Brain_Microproteins_Discovery_summary.py
 python ShortStop_Microproteins_summary.py
 python Create_BED_GTF_FASTA_files.py
 python Create_Alt_Proteoform_Files.py
+python trembl_locus_genes.py          # writes Code/data/trembl_locus_genes.csv (offline, ~5 s)
 
 # Dashboard N-terminus filter support (needs network access to UniProt only
 # for accessions not already cached in Code/data/blast_isoform_reference_sequences.fasta)
 python compute_nterm_peptide_substitutions.py
 ```
 
-All four summary scripts are also invoked by
+All five summary scripts are also invoked by
 `bash run_all_analyses.sh --mode=run` from the repo root. The Annotator
 pipeline and `compute_nterm_peptide_substitutions.py` are not — the former
 needs raw data not shipped here, the latter needs network access on first run.
@@ -58,6 +60,10 @@ The ribosome-profiling summary lives in `Code/RP3_analysis/`, not this module.
 - Raw smORF GTF files (Annotator pipeline only - not in repo).
 - Ensembl reference GTF (Annotator pipeline only - not in repo).
 - `Code/data/microprotein_master.csv` (shipped).
+- `trembl_locus_genes.py` also reads `Code/data/smorf_transcript_flags.tsv`,
+  `Code/data/uniprotkb_proteome_UP000005640_2026_07_13.tsv`,
+  `Code/data/psite_frame_counts_per_orf.tsv` and `Results/RP3/Psite_frame_by_sequence.csv`
+  (all tracked in git).
 
 ## Outputs
 - `../../Results/Annotations/Brain_Microproteins_Discovery_summary.csv`

@@ -211,6 +211,7 @@ run_or_show "python Brain_Microproteins_Discovery_summary.py" "Brain Microprotei
 run_or_show "python ShortStop_Microproteins_summary.py" "ShortStop Microproteins summary" "ShortStop_Microproteins_summary.py"
 run_or_show "python Create_BED_GTF_FASTA_files.py" "Create BED, GTF, and FASTA coordinates for genomic visualization" "Create_BED_GTF_FASTA_files.py"
 run_or_show "python Create_Alt_Proteoform_Files.py" "Create alternative-proteoform GTF, BED, FASTA, and mapping files" "Create_Alt_Proteoform_Files.py"
+run_or_show "python trembl_locus_genes.py" "TrEMBL parent gene at the CDS locus" "trembl_locus_genes.py"
 
 # 1.2 Start-codon context (Kozak / non-ATG initiation)
 print_step "1.2 Running start-codon context analyses..."
@@ -233,6 +234,7 @@ print_step "1.3 Running RP3 analysis summary..."
 cd "${CODE_DIR}/RP3_analysis"
 
 run_or_show "python Psite_frame_mapping.py" "P-site frame mapping" "Psite_frame_mapping.py"
+run_or_show "python smorf_host_cds_density.py" "smORF vs host-CDS ribosome density" "smorf_host_cds_density.py"
 run_or_show "python RP3_Results_summary.py" "RP3 Results summary" "RP3_Results_summary.py"
 
 # ================================================================
