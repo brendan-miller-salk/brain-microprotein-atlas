@@ -1,6 +1,8 @@
-"""Upload three figure directories to a Hugging Face dataset, preserving names.
+"""Upload the figure directories to a Hugging Face dataset, preserving names.
 
-Strategy: temporarily move the three directories into a staging parent so
+Usage: python upload_to_hf.py [DIR ...]   (default: every dir in ALL_DIRS)
+
+Strategy: temporarily move the directories into a staging parent so
 ``upload_large_folder`` picks up the parent layout, then move them back.
 
 The staging parent lives OUTSIDE the Box-synced tree (default: ``~/Desktop``).
@@ -12,13 +14,19 @@ renames (no data copy). Override the location with ``HF_STAGE_DIR=/some/path``.
 """
 import os
 import shutil
+import sys
 from pathlib import Path
 
 from huggingface_hub import HfApi
 
 REPO = "brmiller/brain-microprotein-atlas"
 RESULTS = Path(__file__).parent.resolve()
-DIRS = ["mirror_plots", "expression_profiles", "smorf_cartoon_figures"]
+ALL_DIRS = ["mirror_plots", "mirror_plots_comprehensive", "expression_profiles",
+            "smorf_cartoon_figures"]
+DIRS = sys.argv[1:] or ALL_DIRS
+unknown = [d for d in DIRS if d not in ALL_DIRS]
+if unknown:
+    sys.exit(f"Unknown figure dir(s): {unknown}; choose from {ALL_DIRS}")
 
 # Staging parent OUTSIDE Box (keeps upload .lock/.cache off Box sync).
 STAGE = Path(os.environ.get("HF_STAGE_DIR", Path.home() / "Desktop")).expanduser().resolve() / "hf_upload_stage"
@@ -59,6 +67,7 @@ try:
         repo_id=REPO,
         repo_type="dataset",
         folder_path=str(STAGE),
+        ignore_patterns=["**/.DS_Store", ".DS_Store"],
         num_workers=8,
     )
     print("\nUpload complete.")

@@ -1,0 +1,26 @@
+column,description
+tryptic_peptide,Tryptic peptide (matches an element of peptide_sequence in cleaned_tryptic_peptides_detailed_under_151aa_with_SA.csv)
+protein_id,Microprotein ID (protein_id in the same file)
+Charge,Precursor charge (one charge state per peptide)
+Candidate_Rank,"1-5, candidate PSMs ranked by FragPipe Hyperscore"
+Batch,TMT batch of the PSM
+Scan,MS2 scan number
+Hyperscore,FragPipe Hyperscore
+Is_Selected,True for the representative PSM used for SA_degrees / Confidence everywhere else (one per peptide)
+Better_than_selected,"For non-selected candidates: ';'-joined ladder criteria on which it beats the selected PSM (union_pct, longest_run, full_b_ladder, full_y_ladder, full_by_union); empty otherwise"
+SA_degrees,"PROSIT spectral angle, degrees (lower = better)"
+SA_normalized,"Normalized spectral contrast angle (0-1, higher = better)"
+Confidence,PROSIT tier of this candidate (Strong / Moderate / Weak / Insufficient)
+ladder_b_coverage_pct,% of theoretical b-ion cleavage sites matched in the observed spectrum
+ladder_y_coverage_pct,% of theoretical y-ion cleavage sites matched
+ladder_by_union_coverage_pct,% of cleavage sites matched by a b or y ion
+ladder_longest_b_run,Longest run of consecutive matched b ions
+ladder_longest_y_run,Longest run of consecutive matched y ions
+ladder_longest_by_run,Longest run of consecutive cleavage sites matched by b or y
+ladder_full_b_ladder,b coverage = 100%
+ladder_full_y_ladder,y coverage = 100%
+ladder_full_by_union,b/y union coverage = 100%
+ladder_consec5,>=5 consecutive cleavage sites matched
+ladder_n_theoretical_ions,Theoretical b/y ions considered
+ladder_n_matched_theoretical,Theoretical ions matched
+Plot_png,"Mirror plot path relative to Results/ (Results/mirror_plots_comprehensive/...; HF dataset same path). Empty for single-candidate peptides, which use Results/mirror_plots/<tier>/"

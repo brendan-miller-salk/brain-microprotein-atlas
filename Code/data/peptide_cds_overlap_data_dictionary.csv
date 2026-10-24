@@ -1,0 +1,7 @@
+column,description
+gene_id,smORF ID (master gene_id); Salk smORFs only
+status,All / Some / No peptides: how many of the smORF's located peptides overlap an annotated CDS
+n_peptides,Detected tryptic peptides placed on the genome
+n_overlapping,Peptides with >=1 nt in an annotated same-strand CDS (any frame)
+max_overlap_frac,Largest fraction of one peptide's nucleotides in annotated CDS
+overlapping_peptides,"PEPTIDE(overlap nt/peptide nt), ';'-separated"

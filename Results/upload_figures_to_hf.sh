@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 #
-# Upload the three figure libraries to the Hugging Face *dataset*
+# Upload the figure libraries to the Hugging Face *dataset*
 # brmiller/brain-microprotein-atlas.
 #
 # Runs the four steps end to end:
 #   1. Authenticate with Hugging Face (skipped if already logged in)
-#   2. Check the three figure directories are present and report their size
+#   2. Check the chosen figure directories are present and report their size
 #   3. Pick a staging parent OUTSIDE the Box-synced tree
 #   4. Run upload_to_hf.py (stage -> upload -> restore -> clean up)
 #
 # Step 3 is the reason this wrapper exists. upload_large_folder writes resumable
 # bookkeeping (.cache/.huggingface/ with a .lock per file) *inside* folder_path.
-# With ~28,000 files that is thousands of lock files, and if folder_path sits in
+# With tens of thousands of files that is thousands of lock files, and if folder_path sits in
 # the Box tree, Box syncs every one of them to the cloud. upload_to_hf.py moves
 # the directories to $HF_STAGE_DIR (default ~/Desktop) to dodge this; the check
 # here fails loudly if that path is itself inside a synced folder, which the
@@ -25,6 +25,7 @@
 # Usage (from anywhere):
 #   Results/upload_figures_to_hf.sh
 #   Results/upload_figures_to_hf.sh --yes             # skip the confirmation
+#   Results/upload_figures_to_hf.sh mirror_plots_comprehensive   # just these dirs
 #   HF_STAGE_DIR=/tmp/stage Results/upload_figures_to_hf.sh
 #
 # Non-interactive login: export HF_TOKEN=hf_xxx before running.
@@ -32,7 +33,8 @@
 set -euo pipefail
 
 DATASET_REPO="brmiller/brain-microprotein-atlas"
-DIRS=(mirror_plots expression_profiles smorf_cartoon_figures)
+ALL_DIRS=(mirror_plots mirror_plots_comprehensive expression_profiles smorf_cartoon_figures)
+DIRS=()
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # Github/Results
 
@@ -41,9 +43,15 @@ for arg in "$@"; do
     case "$arg" in
         -y|--yes) ASSUME_YES=1 ;;
         -h|--help) sed -n '3,/^set -euo/p' "${BASH_SOURCE[0]}" | sed -e 's/^#//' -e 's/^ //' -e '$d'; exit 0 ;;
-        *) echo "Unknown option: $arg (try --help)" >&2; exit 1 ;;
+        -*) echo "Unknown option: $arg (try --help)" >&2; exit 1 ;;
+        *)
+            if [[ " ${ALL_DIRS[*]} " != *" $arg "* ]]; then
+                echo "Unknown figure dir: $arg (choose from: ${ALL_DIRS[*]})" >&2; exit 1
+            fi
+            DIRS+=("$arg") ;;
     esac
 done
+(( ${#DIRS[@]} )) || DIRS=("${ALL_DIRS[@]}")
 
 # Optionally activate a conda env that has huggingface_hub installed.
 if [[ -n "${DASHBOARD_CONDA_ENV:-}" ]]; then
@@ -151,7 +159,7 @@ if [[ "$DEV_SRC" == "$DEV_STAGE" ]]; then
     echo "    Same filesystem as the figures — staging is a rename, no data copy."
 else
     echo "    WARNING: different filesystem from the figures ($DEV_SRC vs $DEV_STAGE)." >&2
-    echo "    Staging will COPY ~5 GB instead of renaming. Consider another path." >&2
+    echo "    Staging will COPY multiple GB instead of renaming. Consider another path." >&2
 fi
 echo
 
@@ -168,7 +176,7 @@ fi
 # upload_to_hf.py stages the dirs, uploads, then restores them in a finally
 # block — the restore runs even if the upload fails partway.
 echo "==> [4/4] Uploading figure libraries"
-HF_STAGE_DIR="$STAGE_PARENT" python "$SCRIPT_DIR/upload_to_hf.py"
+HF_STAGE_DIR="$STAGE_PARENT" python "$SCRIPT_DIR/upload_to_hf.py" "${DIRS[@]}"
 echo
 
 echo "Done."

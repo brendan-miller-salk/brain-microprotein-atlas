@@ -34,6 +34,8 @@ as the `R_TEMPLATE` string, for the R-based modules.
 | `cleaned_tryptic_peptides_under_151aa.csv` | 639 K | `Results/generate_supplemental_tables.py` |
 | `cleaned_tryptic_peptides_detailed_under_151aa.csv` | 714 K | `Peptide_TMT_analysis/prosit/` |
 | `cleaned_tryptic_peptides_detailed_under_151aa_with_SA.csv` | 1.2 M | `Microprotein_annotation_summary/alt_proteoform_records.py`; PROSIT-annotated output of the above |
+| `prosit_candidate_psms.csv.gz` | 0.8 M | `Results/microproteins_dashboard.py` (Candidate PSM picker, best-of-candidates Fragment-Ion Coverage); up to 5 candidate PSMs per peptide from the comprehensive PROSIT run |
+| `prosit_candidate_psms_data_dictionary.csv` | 2 K | column definitions for the above |
 | `ac_list_mapping.csv` | 87 K | `scRNAseq_summary_merging_analysis/` |
 | `alt_proteoform_table.csv` | 550 K | `Microprotein_annotation_summary/Create_Alt_Proteoform_Files.py` |
 | `codon_context_sequences.csv.gz` | 343 K | `Codon_context/` |
@@ -44,6 +46,8 @@ as the `R_TEMPLATE` string, for the R-based modules.
 | `psite_frame_counts_per_orf.tsv` | 15 M | `RP3_analysis/Psite_frame_mapping.py`, `RP3_analysis/smorf_host_cds_density.py`; P-site counts per codon position for every GTF CDS (made by `RP3_analysis/psite_frame_counts_per_orf.py`) |
 | `unreviewed_microproteins_peptide_flags.csv` | 1.3 M | `Results/microproteins_dashboard.py` (Peptide Specificity facet, column, entry table); made by `Peptide_specificity/` |
 | `peptide_flags_data_dictionary.csv` | 2 K | column definitions for the above |
+| `peptide_cds_overlap.csv` | 0.2 M | `Results/microproteins_dashboard.py` (Peptides on Annotated CDS facet, Proteomics columns); per Salk smORF, how many detected peptides lie on an annotated same-strand CDS in any frame; made by `Peptide_specificity/peptide_cds_overlap.py` from `browser_tracks/smorf_psm_genomic.bed` and `smorf_flank_structure.csv` |
+| `peptide_cds_overlap_data_dictionary.csv` | 1 K | column definitions for `peptide_cds_overlap.csv` |
 | `smorf_flank_psites.csv` | 1.3 M | `Results/microproteins_dashboard.py` (Flanking Ribo-seq facet, columns, entry section); made by `RP3_analysis/smorf_flank_psites.py` |
 | `smorf_flank_structure.csv` | 1.3 M | `Results/microproteins_dashboard.py` (entry-page P-site plot); same script |
 | `smorf_flank_data_dictionary.csv` | 1 K | column definitions for `smorf_flank_psites.csv` |

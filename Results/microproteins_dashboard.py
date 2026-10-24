@@ -10,6 +10,7 @@ import os
 import ast
 import re
 import html
+import io
 import hashlib
 import struct
 
@@ -255,7 +256,8 @@ RNA_SIG_EMOJI = {
 DECAY_CLASS_TSV = (Path(__file__).resolve().parent.parent / "Code" / "data" /
                    "smorf_trx_priority_color_class_assignments.tsv")
 # Per-peptide b/y fragment-ion coverage of each peptide's PROSIT-selected PSM,
-# bracket-aligned with peptide_sequence (prosit_pipeline.py --annotate-only).
+# bracket-aligned with peptide_sequence (prosit_pipeline.py --annotate-only);
+# overridden per criterion by the best candidate in PROSIT_CANDIDATES_CSV.
 # ladder_* = matched against the theoretical b/y ladder, so b-ion coverage is
 # real rather than limited to the ions PROSIT happens to predict.
 LADDER_CSV = (Path(__file__).resolve().parent.parent / "Code" / "data" /
@@ -263,19 +265,32 @@ LADDER_CSV = (Path(__file__).resolve().parent.parent / "Code" / "data" /
 LADDER_LIST_COLS = ['ladder_b_coverage_pct', 'ladder_y_coverage_pct',
                     'ladder_by_union_coverage_pct', 'ladder_longest_by_run',
                     'ladder_consec5']
+# Up to 5 candidate PSMs per peptide (prosit_pipeline.py comprehensive run),
+# one row per candidate. Is_Selected marks the representative PSM whose SA /
+# Confidence are used everywhere else; the ladder rollups take the best
+# candidate per criterion. Plot_png is relative to Results/ (and to the HF
+# dataset root); single-candidate peptides have no Plot_png and keep their
+# mirror_plots/<tier>/ figure.
+PROSIT_CANDIDATES_CSV = (Path(__file__).resolve().parent.parent / "Code" / "data" /
+                         "prosit_candidate_psms.csv.gz")
+MIRROR_CANDIDATE_BASE = Path(__file__).parent / "mirror_plots_comprehensive"
 # Evidence & Quality "Fragment-Ion Coverage" facet: stable token -> (label,
-# rollup column, help). A microprotein passes if ANY of its peptides does.
+# rollup column, help). A microprotein passes if ANY of its peptides does, and
+# a peptide passes if ANY of its (up to 5) candidate PSMs does.
 FRAG_COV_LEVELS = {
     'consec5': ('≥5 consecutive b/y ions', 'Ladder_Any_Consec5',
                 "At least one peptide shows a run of ≥5 consecutive b or y ions "
-                "(Slavoff et al., 2012). Ticked boxes are OR'd."),
+                "(Slavoff et al., 2012) in any of its candidate PSMs. Ticked boxes "
+                "are OR'd."),
     'full_union': ('Full b/y coverage', 'Ladder_Any_Full_Union',
                    "At least one peptide has every backbone cleavage site covered "
-                   "by a matched b or y ion."),
+                   "by a matched b or y ion in any of its candidate PSMs."),
     'full_b': ('Full b-ion ladder', 'Ladder_Any_Full_B',
-               "At least one peptide has every b ion (b1..b(n-1)) matched."),
+               "At least one peptide has every b ion (b1..b(n-1)) matched in any "
+               "of its candidate PSMs."),
     'full_y': ('Full y-ion ladder', 'Ladder_Any_Full_Y',
-               "At least one peptide has every y ion (y1..y(n-1)) matched."),
+               "At least one peptide has every y ion (y1..y(n-1)) matched in any "
+               "of its candidate PSMs."),
 }
 DECAY_CLASS_LEVELS = ['No NMD · mORF Shift', 'No NMD · mORF Intact',
                       'NMD · mORF Shift', 'NMD · mORF Intact',
@@ -406,6 +421,10 @@ COLUMN_DESCRIPTIONS = {
     'Peptide Specificity': "Whether this unreviewed entry's MS peptides also occur in another human UniProt protein: Unique; Deamidation-only match; Same-mass peptide elsewhere (b/y ions may separate them); Shared tryptic peptide; Possible fragment (same gene / other protein — the peptide sits inside that protein at a non-trypsin site). Non-unique means ambiguous by peptide specificity alone, not disproved. '(partial)' = only some peptides match. NA = Swiss-Prot, not assessed.",
     'Nt-Acetylated': 'At least one tryptic peptide carries an N-terminal acetyl mark — direct evidence that this is a genuine protein N-terminus.',
     'Nt-Acetyl Peptides': 'Tryptic peptide sequence(s) observed with an N-terminal acetyl mark.',
+    'Peptides on Annotated CDS': ('Detected tryptic peptides with ≥1 nt on an annotated same-strand CDS (GENCODE '
+                                  'v43, any frame) / peptides placed on the genome. Salk smORFs only; blank = not '
+                                  'assessed (TrEMBL, Swiss-Prot, no placed peptides).'),
+    'Peptides Overlapping CDS': 'Each peptide on annotated CDS, with its overlap: nt in CDS / peptide nt.',
     'Nt-Acetyl PSMs': 'Total Nt-acetylated PSMs summed across the Nt-acetylated peptides.',
     'Nt-Acetyl PSM Fraction': 'Highest per-peptide fraction of that peptide’s PSMs carrying the Nt-acetyl mark (1.0 = every PSM acetylated).',
     'TMT Tier': 'TMT significance tier: Tier 1 (strongest) … Tier 4.',
@@ -642,22 +661,72 @@ def build_seq_to_coords_index(_path=str(SEQ_TO_COORDS_FILE)):
     return dict(zip(df['sequence'], df['genomic_coordinates']))
 
 
+@st.cache_data(show_spinner=False)
+def _load_prosit_candidates(_path=str(PROSIT_CANDIDATES_CSV)):
+    """Candidate PSMs per peptide (PROSIT_CANDIDATES_CSV), or None if absent."""
+    p = Path(_path)
+    if not p.exists():
+        return None
+    df = pd.read_csv(p)
+    df['Is_Selected'] = df['Is_Selected'].astype(bool)
+    return df.sort_values(['tryptic_peptide', 'protein_id', 'Candidate_Rank'])
+
+
+def _candidate_record(r):
+    """Plot/stat dict for one candidate PSM row (namedtuple from itertuples)."""
+    def _num(v):
+        return None if pd.isna(v) else float(v)
+    return {
+        'quality': r.Confidence if r.Confidence in QUALITY_LEVELS else 'Insufficient',
+        'charge': str(int(r.Charge)),
+        'scan': str(int(r.Scan)),
+        'peptide': r.tryptic_peptide,
+        'rank': int(r.Candidate_Rank),
+        'selected': bool(r.Is_Selected),
+        'batch': r.Batch,
+        'sa': _num(r.SA_degrees),
+        'b_pct': _num(r.ladder_b_coverage_pct),
+        'y_pct': _num(r.ladder_y_coverage_pct),
+        'union_pct': _num(r.ladder_by_union_coverage_pct),
+        'longest_run': _num(r.ladder_longest_by_run),
+        'full_b': bool(r.ladder_full_b_ladder),
+        'full_y': bool(r.ladder_full_y_ladder),
+        'full_union': bool(r.ladder_full_by_union),
+        'consec5': bool(r.ladder_consec5),
+        'better': r.Better_than_selected if isinstance(r.Better_than_selected, str) else '',
+        'filepath': None,
+    }
+
+
 @st.cache_data
-def build_mirror_plot_index(_base=str(MIRROR_PLOT_BASE)):
+def build_mirror_plot_index(_base=str(MIRROR_PLOT_BASE),
+                            _cand_base=str(MIRROR_CANDIDATE_BASE)):
     """Build index of available mirror plot images by peptide.
 
-    Local-first: scans the on-disk directory if present, otherwise pulls the
-    file listing from the Hugging Face dataset and builds URL-based entries.
+    Two libraries, each local-first with a Hugging Face fallback:
+      - mirror_plots/<tier>/PEP_z_scan.png — one plot per peptide (selected PSM);
+      - mirror_plots_comprehensive/... — up to 5 candidate PSMs per peptide,
+        located through PROSIT_CANDIDATES_CSV's Plot_png column.
+    A peptide with candidate plots shows those (the selected one first); one
+    without keeps its single plot, annotated with its candidate stats.
     """
     base = Path(_base)
     index = {}
+    remote = None
+
+    def _remote_set():
+        nonlocal remote
+        if remote is None:
+            remote = set(_list_remote_files())
+        return remote
 
     def _add_entry(peptide, quality, parts, filepath):
         charge = parts[1].replace("z", "") if len(parts) > 1 else "?"
         scan = parts[-1] if len(parts) > 2 else "?"
-        if peptide not in index:
-            index[peptide] = {'best_quality': quality, 'plots': []}
-        index[peptide]['plots'].append({
+        entry = index.setdefault(peptide, {'best_quality': quality, 'plots': []})
+        if QUALITY_LEVELS.index(quality) < QUALITY_LEVELS.index(entry['best_quality']):
+            entry['best_quality'] = quality
+        entry['plots'].append({
             'quality': quality,
             'charge': charge,
             'scan': scan,
@@ -674,22 +743,64 @@ def build_mirror_plot_index(_base=str(MIRROR_PLOT_BASE)):
                 parts = img_file.stem.split("_")
                 if len(parts) >= 3:
                     _add_entry(parts[0], quality, parts, str(img_file))
+    else:
+        # Remote fallback
+        valid_qualities = set(QUALITY_LEVELS)
+        for rel in _remote_set():
+            if not rel.startswith("mirror_plots/") or not rel.endswith(".png"):
+                continue
+            segs = rel.split("/")
+            if len(segs) != 3:
+                continue
+            _, quality, fname = segs
+            if quality not in valid_qualities:
+                continue
+            parts = Path(fname).stem.split("_")
+            if len(parts) >= 3:
+                _add_entry(parts[0], quality, parts, _remote_url(rel))
+
+    cands = _load_prosit_candidates()
+    if cands is None:
         return index
 
-    # Remote fallback
-    valid_qualities = set(QUALITY_LEVELS)
-    for rel in _list_remote_files():
-        if not rel.startswith("mirror_plots/") or not rel.endswith(".png"):
+    # Plot_png paths are relative to Results/, i.e. to cand_base's parent.
+    cand_base = Path(_cand_base)
+    if cand_base.exists():
+        root = cand_base.parent
+        on_disk = {f"{Path(d).relative_to(root).as_posix()}/{f}"
+                   for d, _, files in os.walk(cand_base) for f in files
+                   if f.endswith('.png')}
+        resolve = lambda rel: str(root / rel) if rel in on_disk else None
+    else:
+        resolve = lambda rel: _remote_url(rel) if rel in _remote_set() else None
+
+    for pep, grp in cands.groupby('tryptic_peptide', sort=False):
+        recs = []
+        for r in grp.itertuples(index=False):
+            rec = _candidate_record(r)
+            if isinstance(r.Plot_png, str):
+                rec['filepath'] = resolve(r.Plot_png)
+            recs.append(rec)
+        selected = next((c for c in recs if c['selected']), None)
+        old = index.get(pep)
+        # The single-plot library holds the selected PSM; use it when its
+        # candidate plot is missing (single-candidate peptides, or a partial
+        # download / upload).
+        if selected and selected['filepath'] is None and old:
+            selected['filepath'] = old['plots'][0]['filepath']
+        plots = [c for c in recs if c['filepath']]
+        if not plots:
+            if old:
+                old['candidates'] = recs
             continue
-        segs = rel.split("/")
-        if len(segs) != 3:
-            continue
-        _, quality, fname = segs
-        if quality not in valid_qualities:
-            continue
-        parts = Path(fname).stem.split("_")
-        if len(parts) >= 3:
-            _add_entry(parts[0], quality, parts, _remote_url(rel))
+        plots.sort(key=lambda c: (not c['selected'], c['rank']))
+        index[pep] = {
+            # The peptide's tier is the selected PSM's, as in the master.
+            'best_quality': selected['quality'] if selected else
+                            min((c['quality'] for c in plots), key=QUALITY_LEVELS.index),
+            'plots': plots,
+            'candidates': recs,
+        }
     return index
 
 
@@ -812,7 +923,9 @@ def get_matching_mirror_plots(tryptic_peptides_str, mirror_index):
         pep = pep.strip()
         if pep in mirror_index:
             matches.extend(mirror_index[pep]['plots'])
-    matches.sort(key=lambda x: QUALITY_LEVELS.index(x['quality']))
+    # Order peptides by their tier; the stable sort keeps each peptide's own
+    # plot order (selected PSM first, then candidates by rank).
+    matches.sort(key=lambda x: QUALITY_LEVELS.index(mirror_index[x['peptide']]['best_quality']))
     return matches
 
 
@@ -1633,6 +1746,37 @@ HOSTCDS_HELP = (
     "ribosomes, and start/stop-codon pile-up on short ORFs is not removed."
 )
 
+# Peptides on annotated CDS (Code/Peptide_specificity/peptide_cds_overlap.py):
+# does any detected tryptic peptide of a Salk smORF lie, in any frame, on
+# nucleotides of an annotated same-strand CDS (e.g. the part of a uoORF that
+# overlaps the main ORF)? Keyed on master gene_id; TrEMBL and Swiss-Prot get no
+# row (a TrEMBL entry's own CDS is annotated, so it would overlap trivially).
+PEPCDS_CSV = (Path(__file__).resolve().parent.parent / "Code" / "data" /
+              "peptide_cds_overlap.csv")
+# Facet token -> (CSV status, checkbox label). Levels are exclusive and OR'd.
+PEPCDS_LEVELS = {
+    'all': ('All peptides', 'All peptides on annotated CDS'),
+    'some': ('Some peptides', 'Some peptides on annotated CDS'),
+    'none': ('No peptides', 'No peptide on annotated CDS'),
+}
+PEPCDS_TABLE_COLS = {
+    'PepCDS_Count': 'Peptides on Annotated CDS',
+    'PepCDS_Peptides': 'Peptides Overlapping CDS',
+}
+PEPCDS_HELP = (
+    "Whether a Salk smORF's detected tryptic peptides lie on genomic sequence that also "
+    "encodes an annotated CDS (GENCODE v43, same strand, any reading frame), counting a "
+    "peptide when at least 1 nt of its spliced genomic span falls in that CDS. Example: a "
+    "uoORF peptide inside the region the smORF shares with the main ORF is read from the "
+    "main ORF's nucleotides in another frame. Peptide Specificity checks the peptide "
+    "sequence, so it does not catch this.\n\n"
+    "Expected by construction for iORFs and in-frame isoforms (Iso, N-Iso, D-Iso), and "
+    "never for uORFs and dORFs clear of the CDS. Only Salk smORFs with peptides "
+    "placed on the genome are assessed. TrEMBL entries are not assessed, because their own "
+    "CDS is an annotated Ensembl CDS, and Swiss-Prot entries are not assessed either. "
+    "Opposite-strand CDS are not considered."
+)
+
 
 def _resolve_master_source(csv_path=MASTER_CSV):
     """Return a path pandas can read for the master table.
@@ -1863,6 +2007,32 @@ def load_hostcds_density(_csv_path=str(HOSTCDS_CSV)):
     })
 
 
+@st.cache_data(show_spinner=False)
+def load_peptide_cds_overlap(_csv_path=str(PEPCDS_CSV)):
+    """Peptide overlap with annotated CDS, keyed on master gene_id (Salk smORFs only).
+
+    Returns gene_id, PepCDS_status (the CSV status, matched by the facet), and
+    the PEPCDS_TABLE_COLS: PepCDS_Count ('n/N peptides') and PepCDS_Peptides
+    (each overlapping peptide with overlap nt / peptide nt). None if the file is
+    unavailable, so the facet and columns disappear.
+    """
+    p = Path(_csv_path)
+    if not p.exists():
+        return None
+    try:
+        f = pd.read_csv(p, usecols=['gene_id', 'status', 'n_peptides', 'n_overlapping',
+                                    'overlapping_peptides'])
+    except Exception:
+        return None
+    return pd.DataFrame({
+        'gene_id': f['gene_id'],
+        'PepCDS_status': f['status'].astype(str),
+        'PepCDS_Count': (f['n_overlapping'].astype(int).astype(str) + '/'
+                         + f['n_peptides'].astype(int).astype(str)),
+        'PepCDS_Peptides': f['overlapping_peptides'].fillna('').str.replace(';', '; '),
+    })
+
+
 # Best-tier ranking used to collapse the bracketed PROSIT `Confidence` list.
 _CONFIDENCE_RANK = {'Strong': 0, 'Moderate': 1, 'Weak': 2, 'Insufficient': 3}
 
@@ -2017,6 +2187,12 @@ def load_and_filter_master(_csv_path=str(MASTER_CSV)):
         _bad = mp["HostCDS_orf_codons"].notna() & mp["HostCDS_orf_codons"].ne(_aa)
         _hcols = [c for c in mp.columns if c.startswith("HostCDS_")]
         mp.loc[_bad, _hcols] = np.nan
+
+    # Step 10b: tryptic peptides on annotated CDS, also keyed on gene_id (same
+    # reason). PepCDS_status NaN = not assessed.
+    _pepcds = load_peptide_cds_overlap()
+    if _pepcds is not None and "gene_id" in mp.columns:
+        mp = mp.merge(_pepcds, on="gene_id", how="left", validate="one_to_one")
 
     # Step 11: TrEMBL parent gene = the gene at the CDS locus, where it differs
     # from the master's UniProt name (applied to Parent_Gene in
@@ -2179,19 +2355,41 @@ def load_analysis_results():
             if v is not None and v.get("df") is not None}
 
 
+def _best_candidate_ladder():
+    """(peptide, protein_id) -> best ladder values over its candidate PSMs.
+
+    Each criterion is maximised independently, so 'full b' and 'full y' may
+    come from different candidates. Values are ordered like LADDER_LIST_COLS.
+    """
+    cands = _load_prosit_candidates()
+    if cands is None:
+        return {}
+    best = cands.groupby(['tryptic_peptide', 'protein_id']).agg(
+        b=('ladder_b_coverage_pct', 'max'),
+        y=('ladder_y_coverage_pct', 'max'),
+        u=('ladder_by_union_coverage_pct', 'max'),
+        run=('ladder_longest_by_run', 'max'),
+        c5=('ladder_consec5', 'any'))
+    return {k: tuple(v) for k, v in zip(best.index, best.itertuples(index=False, name=None))}
+
+
 def _load_ladder_rollups():
     """Per-microprotein b/y fragment-ion coverage rollups from LADDER_CSV.
 
     Returns one row per sequence: the per-peptide lists (aligned with
     Tryptic_Peptides) plus best/longest/any rollups over the peptides, or None
-    if the file or its ladder columns are missing.
+    if the file or its ladder columns are missing. LADDER_CSV holds the
+    selected PSM's values; peptides in PROSIT_CANDIDATES_CSV take the best
+    candidate per criterion instead (_best_candidate_ladder).
     """
     if not LADDER_CSV.exists():
         return None
     try:
-        lad = pd.read_csv(LADDER_CSV, usecols=['sequence'] + LADDER_LIST_COLS)
+        lad = pd.read_csv(LADDER_CSV, usecols=['sequence', 'protein_id', 'peptide_sequence']
+                          + LADDER_LIST_COLS)
     except ValueError:
         return None  # file predates the ladder columns
+    best = _best_candidate_ladder()
 
     def _parse(cell):
         if not _not_na(cell):
@@ -2203,10 +2401,15 @@ def _load_ladder_rollups():
         return list(vals) if isinstance(vals, (list, tuple)) else [vals]
 
     rows = []
-    for seq, b, y, u, run, c5 in lad[['sequence'] + LADDER_LIST_COLS].itertuples(
+    for seq, pid, peps, b, y, u, run, c5 in lad[
+            ['sequence', 'protein_id', 'peptide_sequence'] + LADDER_LIST_COLS].itertuples(
             index=False, name=None):
         b, y, u, run, c5 = (_parse(b), _parse(y), _parse(u), _parse(run),
                             _parse(c5))
+        for i, pep in enumerate(_parse(peps)):
+            hit = best.get((pep, pid))
+            if hit is not None and i < len(b):
+                b[i], y[i], u[i], run[i], c5[i] = hit
         uv = [v for v in u if v is not None]
         rv = [v for v in run if v is not None]
         c5v = [bool(v) for v in c5 if v is not None]
@@ -2250,6 +2453,7 @@ def load_and_merge_all_data():
                              'PepSpec_Partial', *PEPSPEC_COLS.values(),
                              'Flank_gene_id', *(f'Flank_{c}' for c in FLANK_COLS),
                              'HostCDS_tier', *HOSTCDS_TABLE_COLS,
+                             'PepCDS_status', *PEPCDS_TABLE_COLS,
                              'TrEMBLLocus_symbol', 'TrEMBLLocus_prev']
                   if c in mp.columns]
     _acetyl_cols = [c for c in ('Nt_acetyl_tryptic_peptide', 'Nt_acetyl_N_PSMs',
@@ -2843,6 +3047,8 @@ def _source_csv_paths():
         DECAY_CLASS_TSV,
         # Per-peptide b/y fragment-ion coverage (Fragment-Ion Coverage facet).
         LADDER_CSV,
+        # Candidate PSMs per peptide (best-of-candidates ladder rollups).
+        PROSIT_CANDIDATES_CSV,
         # Peptide-specificity flags (Peptide Specificity facet + entry table).
         PEPTIDE_FLAGS_CSV,
         # Per-sequence P-site frame stats (read in _derive_rp3).
@@ -2851,6 +3057,8 @@ def _source_csv_paths():
         FLANK_CSV,
         # smORF vs host-CDS ribosome density (Ribo-seq Density vs Host CDS facet).
         HOSTCDS_CSV,
+        # Tryptic peptides on annotated CDS (Peptides on Annotated CDS facet).
+        PEPCDS_CSV,
         # TrEMBL parent gene at the CDS locus (Parent Gene override).
         TREMBL_LOCUS_CSV,
     ]
@@ -2864,13 +3072,14 @@ def _load_unified_df_with_disk_cache():
     parquet_path = cache_dir / "unified_df.parquet"
     fp_path = cache_dir / "unified_df.fingerprint"
 
-    # Include mirror_index size in fingerprint so _Spectra_Quality column
-    # invalidates when figure libraries change.
+    # Include the mirror plot count in the fingerprint so _Spectra_Quality
+    # invalidates when figure libraries change (a count of peptides alone would
+    # miss extra candidate plots for peptides that already had one).
     try:
         mirror_index = build_mirror_plot_index()
     except Exception:
         mirror_index = {}
-    mirror_fp = f"mirror:{len(mirror_index)}"
+    mirror_fp = f"mirror:{sum(len(v['plots']) for v in mirror_index.values())}"
 
     fp = "|".join(
         f"{p.name}:{p.stat().st_mtime_ns}:{p.stat().st_size}"
@@ -3448,6 +3657,7 @@ def main():
         selected_min_peptides = _sel('f_min_peptides', MIN_PEPTIDE_TIERS)
         selected_frag = _sel('f_frag', list(FRAG_COV_LEVELS))
         selected_pepspec = _sel('f_pepspec', _dom_pepspec)
+        selected_pepcds = _sel('f_pepcds', PEPCDS_LEVELS)
         selected_decay = _sel('f_decay', _dom_decay)
         selected_shortstop = _sel('f_shortstop', _dom_shortstop)
         selected_tmt_sig = _sel('f_tmt_sig', _dom_tmt_sig)
@@ -3550,6 +3760,10 @@ def main():
         _add_mask('frag', _frag_any)
         if selected_pepspec and _col('Peptide_Specificity') is not None:
             _add_mask('pepspec', base_df['Peptide_Specificity'].isin(selected_pepspec))
+        # Peptides on annotated CDS: NaN (not assessed) never matches a level.
+        if selected_pepcds and _col('PepCDS_status') is not None:
+            _add_mask('pepcds', base_df['PepCDS_status'].isin(
+                [PEPCDS_LEVELS[t][0] for t in selected_pepcds]))
         if selected_decay and _col('NMD_Decay_Class') is not None:
             _add_mask('decay', base_df['NMD_Decay_Class'].isin(selected_decay))
         if selected_shortstop and _col('ShortStop_Label') is not None:
@@ -3734,6 +3948,11 @@ def main():
                 for _lvl in _dom_pepspec:
                     _count_checkbox(f"f_pepspec_{_lvl}", _lvl, int(_psc.get(_lvl, 0)),
                                     help=PEPSPEC_LEVEL_HELP[_lvl])
+            if 'PepCDS_status' in base_df.columns:
+                st.markdown("**Peptides on Annotated CDS**", help=PEPCDS_HELP)
+                _pcc = _narrow(skip='pepcds')['PepCDS_status'].value_counts()
+                for _tok, (_status, _lbl) in PEPCDS_LEVELS.items():
+                    _count_checkbox(f"f_pepcds_{_tok}", _lbl, int(_pcc.get(_status, 0)))
 
         # ── Differential Expression ──
         # Checkbox facets like the rest of the sidebar: the checkbox *key* carries
@@ -3999,6 +4218,9 @@ def main():
             FRAG_COV_LEVELS[t][0] for t in selected_frag)))
     if selected_pepspec:
         _active_chips.append(("Peptide specificity", ", ".join(map(str, selected_pepspec))))
+    if selected_pepcds and 'PepCDS_status' in unified_df.columns:
+        _active_chips.append(("Peptides on CDS", ", ".join(
+            PEPCDS_LEVELS[t][0] for t in selected_pepcds)))
     if selected_ribo:
         _active_chips.append(("Ribosome coverage", ", ".join(map(str, selected_ribo))))
     for _s, _ws in selected_flank.items():
@@ -4153,6 +4375,7 @@ def main():
         'Psites_frame0_RPKM': 'P-site Frame 0 RPKM',
         **HOSTCDS_TABLE_COLS,
         **FLANK_TABLE_COLS,
+        **PEPCDS_TABLE_COLS,
         'Tryptic_Peptides': 'Tryptic Peptides',
         '_Ladder_Display': 'b/y Coverage % per Peptide',
         'Ladder_Best_Union_Pct': 'Best b/y Coverage %',
@@ -4351,7 +4574,7 @@ def _render_results_table(filtered_df, display_df):
             'TMT CI low (0%)', 'TMT CI high (0%)', "TMT Cohen's d (0%)",
             'TMT p-val (0%)', 'TMT q-val (0%)',
             'MS Detect Control', 'MS Detect AD', 'TMT Tier', 'Spectra Quality',
-            'Peptide Specificity', 'Best b/y Coverage %', 'Longest b/y Run', 'Peptides ≥5 Consec b/y',
+            'Peptide Specificity', *PEPCDS_TABLE_COLS.values(), 'Best b/y Coverage %', 'Longest b/y Run', 'Peptides ≥5 Consec b/y',
             'Tryptic Peptides', 'b/y Coverage % per Peptide', 'Tryptic Protein ID',
             'Tryptic Start Positions', 'Tryptic End Positions',
             'Nt-Acetylated', 'Nt-Acetyl Peptides', 'Nt-Acetyl PSMs',
@@ -4536,10 +4759,10 @@ def _render_results_table(filtered_df, display_df):
             'Nt-Acetyl PSMs': st.column_config.NumberColumn('Nt-Acetyl PSMs', help='Total Nt-acetylated PSMs summed across the Nt-acetylated peptides', format='%d'),
             'Nt-Acetyl PSM Fraction': st.column_config.NumberColumn('Nt-Acetyl PSM Fraction', help='Highest per-peptide fraction of that peptide’s PSMs that carry the Nt-acetyl mark (1.0 = every PSM acetylated)', format='%.3f'),
             'Spectra Quality': st.column_config.TextColumn('Spectra Quality', help='Best Prosit spectral-match confidence tier (from the master Confidence column)', max_chars=20),
-            'Best b/y Coverage %': st.column_config.NumberColumn('Best b/y Coverage %', help='Highest per-peptide % of backbone cleavage sites covered by a matched b or y ion (theoretical b/y ladder, 20 ppm, PROSIT-selected PSM)', format='%.1f'),
-            'Longest b/y Run': st.column_config.NumberColumn('Longest b/y Run', help='Longest run of consecutive matched b or y ions on any peptide', format='%d'),
-            'Peptides ≥5 Consec b/y': st.column_config.NumberColumn('Peptides ≥5 Consec b/y', help='Number of peptides with ≥5 consecutive matched b or y ions (Slavoff et al., 2012)', format='%d'),
-            'b/y Coverage % per Peptide': st.column_config.TextColumn('b/y Coverage % per Peptide', help='b/y cleavage-site coverage of each tryptic peptide, in the same order as Tryptic Peptides (— = no selected PSM)', max_chars=40),
+            'Best b/y Coverage %': st.column_config.NumberColumn('Best b/y Coverage %', help='Highest per-peptide % of backbone cleavage sites covered by a matched b or y ion (theoretical b/y ladder, 20 ppm, best of up to 5 candidate PSMs per peptide)', format='%.1f'),
+            'Longest b/y Run': st.column_config.NumberColumn('Longest b/y Run', help='Longest run of consecutive matched b or y ions on any peptide (best candidate PSM)', format='%d'),
+            'Peptides ≥5 Consec b/y': st.column_config.NumberColumn('Peptides ≥5 Consec b/y', help='Number of peptides with ≥5 consecutive matched b or y ions in any candidate PSM (Slavoff et al., 2012)', format='%d'),
+            'b/y Coverage % per Peptide': st.column_config.TextColumn('b/y Coverage % per Peptide', help='b/y cleavage-site coverage of each tryptic peptide, in the same order as Tryptic Peptides; best of up to 5 candidate PSMs (— = no selected PSM)', max_chars=40),
             'BLAST UniProt Match': st.column_config.TextColumn('BLAST UniProt Match', help='UniProt accession of the best BLASTp hit', max_chars=15),
             'BLAST % Match': st.column_config.NumberColumn('BLAST % Match', help='BLASTp percent identity to the best UniProt hit', format='%.1f'),
             'BLAST Aln Length': st.column_config.NumberColumn('BLAST Aln Length', help='BLASTp alignment length (residues)', format='%d'),
@@ -6085,6 +6308,22 @@ def _render_entry_page(unified_df, entry_key, mirror_index, expression_index, se
             st.markdown('<div class="entry-tail"></div>', unsafe_allow_html=True)
 
 
+def _candidate_label(p):
+    """Selectbox label for one mirror plot (candidate PSM or legacy plot)."""
+    if 'rank' not in p:
+        return f"z={p['charge']}+  scan={p['scan']}  {QUALITY_EMOJI[p['quality']]}"
+    tags = [t for t, on in (('full b', p['full_b']), ('full y', p['full_y']),
+                            ('full b/y', p['full_union'])) if on]
+    if p['better']:
+        tags.append('beats selected')
+    fmt = lambda v: '—' if v is None else f"{v:g}"
+    sa = '—' if p['sa'] is None else f"{p['sa']:.1f}"
+    return (f"#{p['rank']} {'selected' if p['selected'] else 'alt'} · "
+            f"z={p['charge']}+ · scan {p['scan']} · SA {sa}° · "
+            f"b {fmt(p['b_pct'])}% / y {fmt(p['y_pct'])}% / b/y {fmt(p['union_pct'])}%"
+            + (f"  [{', '.join(tags)}]" if tags else ""))
+
+
 def _show_mirror_plots(row, mirror_index, key_prefix):
     """Show Prosit mirror plot spectra for one microprotein."""
     tryptic_str = row.get('Tryptic_Peptides')
@@ -6135,13 +6374,13 @@ def _show_mirror_plots(row, mirror_index, key_prefix):
     peptide_plots = plots_by_peptide[selected_peptide]
     if len(peptide_plots) > 1:
         plot_idx = st.selectbox(
-            "Charge / scan:",
+            "Candidate PSM:",
             options=range(len(peptide_plots)),
-            format_func=lambda i: (
-                f"z={peptide_plots[i]['charge']}+  "
-                f"scan={peptide_plots[i]['scan']}  "
-                f"{QUALITY_EMOJI[peptide_plots[i]['quality']]}"),
-            key=f"spectra_plot_{key_prefix}"
+            format_func=lambda i: _candidate_label(peptide_plots[i]),
+            key=f"spectra_plot_{selected_peptide}_{key_prefix}",
+            help="Up to 5 candidate PSMs per peptide, ranked by Hyperscore. The "
+                 "selected PSM sets the peptide's PROSIT tier; the fragment-ion "
+                 "coverage filters use the best candidate for each criterion."
         )
     else:
         plot_idx = 0
@@ -6152,7 +6391,30 @@ def _show_mirror_plots(row, mirror_index, key_prefix):
         f"Peptide: `{plot_info['peptide']}` · "
         f"Charge: {plot_info['charge']}+ · "
         f"Scan: {plot_info['scan']}"
+        + (f" · Batch: {plot_info['batch']}" if plot_info.get('batch') else "")
     )
+    cand_rows = mirror_index.get(selected_peptide, {}).get('candidates') or []
+    if len(cand_rows) > 1:
+        st.dataframe(pd.DataFrame([{
+            'Rank': c['rank'],
+            'PSM': 'selected' if c['selected'] else 'alt',
+            'Tier': c['quality'],
+            'SA (°)': c['sa'],
+            'b %': c['b_pct'],
+            'y %': c['y_pct'],
+            'b/y %': c['union_pct'],
+            'Longest run': c['longest_run'],
+            'Full b': c['full_b'],
+            'Full y': c['full_y'],
+            'Full b/y': c['full_union'],
+            '≥5 consec': c['consec5'],
+            'Beats selected on': c['better'].replace(';', ', ').replace('_', ' '),
+            'Plot': bool(c['filepath']),
+        } for c in sorted(cand_rows, key=lambda c: (not c['selected'], c['rank']))]),
+            width='stretch', hide_index=True, column_config={
+            'SA (°)': st.column_config.NumberColumn(format='%.1f'),
+            'Longest run': st.column_config.NumberColumn(format='%d'),
+        })
     # Fixed pixel width (NOT width='stretch'): decouples the image size from the
     # container width so a vertical-scrollbar toggle can't resize the image and
     # re-trigger an infinite reflow loop (the "screen shake" on open).

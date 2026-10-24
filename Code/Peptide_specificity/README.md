@@ -87,6 +87,30 @@ the "tryptic" end, so the peptide was credited to the smORF.
   occurrence, with ties broken by FASTA order. `matching_protein` lists up to 8
   genes.
 
+## Peptides on annotated CDS (`peptide_cds_overlap.py`)
+
+Peptide specificity tests the peptide *sequence*. A peptide can be unique by
+sequence and still be read from the nucleotides of an annotated CDS in another
+frame, e.g. the part of a uoORF that overlaps the main ORF. `peptide_cds_overlap.py`
+intersects each peptide's spliced genomic blocks
+(`../data/browser_tracks/smorf_psm_genomic.bed`) with the merged annotated
+same-strand CDS around its smORF (`annotated_cds` in
+`../data/smorf_flank_structure.csv`, GENCODE v43). A peptide counts as
+overlapping at ≥ 1 nt, in any frame.
+
+- **Output**: `../data/peptide_cds_overlap.csv` (one row per Salk smORF with
+  placed peptides, 2,668; `status` All / Some / No peptides) and
+  `../data/peptide_cds_overlap_data_dictionary.csv`. Runs in ~2 s on shipped
+  data (`run_all_analyses.sh` step 1.4).
+- **Scope**: Salk smORFs only. A TrEMBL entry's own CDS is an annotated
+  Ensembl CDS, so all of its peptides would overlap trivially. Opposite-strand
+  CDS are not considered.
+- **Consumer**: the dashboard's *Peptides on Annotated CDS* facet and two
+  Proteomics-view columns.
+- Overlap is expected for iORFs and in-frame isoforms. It never occurs for
+  uORFs or dORFs clear of the CDS, which serves as a sanity check. Of the 79
+  uoORFs with placed peptides, 37 have ≥ 1 peptide on the main-ORF CDS.
+
 ## Limitations
 
 1. **Theoretical, not spectral.** Whether the distinguishing b/y ions

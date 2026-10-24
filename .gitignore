@@ -140,6 +140,7 @@ Results/_hf_stage/
 
 # === Large figure libraries (mirrored to Hugging Face dataset; see Results/README.md) ===
 Results/mirror_plots/
+Results/mirror_plots_comprehensive/
 Results/expression_profiles/
 Results/smorf_cartoon_figures/
 

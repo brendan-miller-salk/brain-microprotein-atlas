@@ -237,6 +237,12 @@ run_or_show "python Psite_frame_mapping.py" "P-site frame mapping" "Psite_frame_
 run_or_show "python smorf_host_cds_density.py" "smORF vs host-CDS ribosome density" "smorf_host_cds_density.py"
 run_or_show "python RP3_Results_summary.py" "RP3 Results summary" "RP3_Results_summary.py"
 
+# 1.4 Peptides on annotated CDS (genomic overlap, any frame)
+print_step "1.4 Locating peptides on annotated CDS..."
+cd "${CODE_DIR}/Peptide_specificity"
+
+run_or_show "python peptide_cds_overlap.py" "Tryptic peptides on annotated CDS" "peptide_cds_overlap.py"
+
 # ================================================================
 # PHASE 2: Transcriptomics Results Summary
 # ================================================================

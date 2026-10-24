@@ -145,6 +145,17 @@ The composite tier is written to the `Confidence` column of
   `ladder_consec5`.
 - `mirror_plots/{Strong,Moderate,Weak,Insufficient}/*.{png,pdf}` -
   per-peptide 3-panel diagnostic figures.
+- Comprehensive run (`prosit_comprehensive_20261023`): every candidate PSM
+  scored, not just the selected one. `all_candidates_coverage.csv` (one row
+  per candidate; `Is_Selected`, `Better_than_selected`, SA, `Confidence`,
+  `ladder_*`, `Plot_png`) ships as `Code/data/prosit_candidate_psms.csv.gz`
+  (`prosit_*` columns dropped; see its data dictionary). Plots:
+  `mirror_plots_comprehensive/{selected_best,alt_better}/<protein>/<peptide>/r<rank>_{SEL,alt}_*.png`
+  (PNG only; `alt_better/` = peptides where a non-selected candidate beats
+  the selected one on a ladder criterion). Peptides with a single candidate
+  have no plot here and keep their `mirror_plots/` figure. The selected PSM
+  is unchanged, so `Confidence` and SA match the files above; the dashboard
+  takes the best candidate for each ladder criterion independently.
 
 ### 3. Results Summary
 - **`Proteomics_Results_summary.py`** - Generates final summary tables and statistics.
